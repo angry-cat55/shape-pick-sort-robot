@@ -85,7 +85,6 @@ Python · PyBullet · PyTorch · NumPy · OpenCV · ROS2
 ## 문서
 
 - [설계 명세](docs/superpowers/specs/2026-10-04-shape-sort-design.md)
-- [문서 안내와 실험 기록 규칙](docs/README.md)
 - [실험 기록 양식](docs/experiments.csv)
 
 작은 검증 단계별로 구현하고 결과를 명세와 실험 기록에 반영하는 가벼운 SDD 방식으로 진행합니다.

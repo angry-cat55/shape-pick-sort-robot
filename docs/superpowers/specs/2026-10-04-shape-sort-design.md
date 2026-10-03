@@ -132,3 +132,10 @@ Notion 이미지/독립 notebook·원본 과제·외부 링크 전체는 미확�
 문서의 시작 설정과 통과 목표는 실험 결과가 아니다.
 실험으로 바뀐 범위/임계값은 명세·progress·실험 설정을 함께 갱신한다.
 사용자의 최신 지시 > 명시된 실제 검증 > 승인된 설계 > 미검증 제안.
+
+## 실험 CSV 기록 규칙
+- experiment_kind로 실험 역할, pose_source로 oracle/camera를 구분한다.
+- attempt_index는 최초=0, 재시도=1/2. 작업 단위와 시도 단위 분모를 구분한다.
+- 미측정·해당 없음은 빈칸과 notes로 기록하며 실패0으로 해석하지 않는다.
+- config_ref에 재현 가능한 설정, artifact_ref에 로그·영상 경로를 남긴다.
+- recorded_at_kst는 KST offset을 포함하며 sim_duration_s와 wall_duration_s를 구분한다.
