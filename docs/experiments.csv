@@ -1,0 +1,1 @@
+run_id,recorded_at_kst,experiment_kind,config_ref,seed,scene_id,split,model_ref,true_class,predicted_class,class_score,pose_source,attempt_index,grasp_strategy,lift_success,drop_detected,predicted_bin_arrival,true_bin_arrival,failure_reason,position_error_m,yaw_error_rad,sim_duration_s,wall_duration_s,artifact_ref,notes

@@ -1,0 +1,30 @@
+# Local handoff and personal environment notes
+/docs/HANDOFF_FULL_KO.md
+/docs/PROGRESS.md
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+
+# ROS build artifacts
+build/
+install/
+log/
+
+# Generated datasets, checkpoints and local run artifacts
+/data/
+/checkpoints/
+/outputs/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
