@@ -94,19 +94,26 @@ def components(mask):
 
 
 def cuboid_geometry(xy):
-    # 직육면체는 긴 방향에 맞춰 손끝을 돌려야 한다. PCA로 그 방향을 구한다.
-    _, vectors = np.linalg.eigh(np.cov(xy.T))
-    major = vectors[:, -1]
-    yaw = float(np.arctan2(major[1], major[0]) % np.pi)
-    if yaw > np.pi / 2:
-        yaw -= np.pi
-    axes = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
-    local = xy @ axes
-    # 실제 물체를 돌리지 않고 좌표의 축만 맞춘 뒤 양 끝의 중앙·짧은 폭을 구한다.
-    low, high = local.min(axis=0), local.max(axis=0)
-    center = ((low + high) / 2) @ axes.T
+    # 정사각형은 긴 축이 없어 PCA 방향이 흔들린다. 점을 감싸는 최소 면적 사각형을 찾는다.
+    # 0~90도를 0.1도씩 비교한다. 크기·방향은 생성 정답 없이 카메라 상면 점으로만 구한다.
+    best = None
+    for yaw in np.arange(900) * (np.pi / 1800):
+        axes = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
+        local = xy @ axes
+        low, high = local.min(axis=0), local.max(axis=0)
+        spans = high - low
+        area = float(np.prod(spans))
+        if best is None or area < best[0]:
+            best = (area, float(yaw), spans, ((low + high) / 2) @ axes.T)
+    _, yaw, spans, center = best
+    # 긴 변에 손끝 방향을 맞추고 짧은 변을 집는다. 정사각형의 90도 동등 방향은 0도 가까이 통일한다.
+    if abs(spans[0] - spans[1]) <= 0.0005:
+        if yaw > np.pi / 4:
+            yaw -= np.pi / 2
+    elif spans[1] > spans[0]:
+        yaw -= np.pi / 2
     return {"valid": True, "center_xy_m": center.tolist(),
-            "width_m": float(high[1] - low[1]), "yaw_rad": yaw}
+            "width_m": float(min(spans)), "yaw_rad": yaw}
 
 
 def cylinder_geometry(xy):
@@ -168,7 +175,13 @@ def estimate(observation, empty, camera, object_shape="cuboid"):
     }
 
 
-def estimate_many(observation, empty, camera, object_shape):
+def estimate_many(observation, empty, camera, object_shape, supported_top_m=None):
+    # 실행 전에 정한 지원 윗면 크기다. 시뮬레이터의 개별 물체 크기는 조회하지 않는다.
+    expected = np.asarray(supported_top_m if supported_top_m is not None else
+                          ([0.06, 0.04] if object_shape == "cuboid" else [0.05, 0.05]), dtype=float)
+    if expected.shape != (2,) or not np.isfinite(expected).all() or np.any(expected <= 0):
+        raise ValueError("지원 윗면 크기는 양수·유한수 두 개여야 합니다")
+    expected = np.sort(expected)
     # 생성 목록 없이 깊이 차이로 영역을 분리한다. 좌표 계산은 기존 함수를 재사용한다.
     depth = observation["depth"]
     if (depth.shape != (camera["height"], camera["width"]) or depth.shape != empty["depth"].shape
@@ -195,8 +208,7 @@ def estimate_many(observation, empty, camera, object_shape):
             spans = np.ptp(top[:, :2] @ axes, axis=0)
             # 이번 장면의 지원 크기와 비교한다. 잘린 윗면·붙은 영역의 일부를 보류할 수 있다.
             # 개별 생성 정답은 읽지 않는다. 임의 크기와 모든 가림을 판별하는 검사는 아니다.
-            expected = np.array([0.06, 0.04] if object_shape == "cuboid" else [0.05, 0.05])
-            if np.any(np.abs(spans - expected) > expected * 0.15):
+            if np.any(np.abs(np.sort(spans) - expected) > expected * 0.15):
                 geometry = {"valid": False, "failure_reason": "incomplete_or_merged_surface"}
         results.append({**geometry, "mask": region})
     return results

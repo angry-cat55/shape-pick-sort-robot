@@ -13,6 +13,48 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 
 class MultiSceneTests(unittest.TestCase):
+    def test_configured_square_footprint_keeps_partial_surface_guard(self):
+        import inspect
+        import numpy as np
+        from rgbd_camera import capture, estimate_many, world_points
+        self.assertIn("supported_top_m", inspect.signature(estimate_many).parameters)
+        m = self.module()
+        client = p.connect(p.DIRECT)
+        try:
+            scene = m.build_scene([{"shape": "cuboid", "xy": [0.5, 0], "yaw": 0, "size_m": [0.064, 0.064, 0.07]}], m.LAYOUT)
+            self.assertTrue(m.settle_scene(scene)["settled"])
+            obs = capture(scene["camera"])
+            # 지원 크기는 실행 전 설정이며, 개별 물체 pose를 추정 함수에 넘기지 않는다.
+            configured = estimate_many(obs, scene["empty"], scene["camera"], "cuboid", supported_top_m=[0.064, 0.064])
+            self.assertEqual(sum(r["valid"] for r in configured), 1)
+            default = estimate_many(obs, scene["empty"], scene["camera"], "cuboid")
+            self.assertFalse(any(r["valid"] for r in default))
+            cut = configured[0]["mask"] & (world_points(obs)[..., 0] < 0.5)
+            partial = dict(obs)
+            partial["depth"] = np.where(cut, scene["empty"]["depth"], obs["depth"])
+            results = estimate_many(partial, scene["empty"], scene["camera"], "cuboid", supported_top_m=[0.064, 0.064])
+            self.assertFalse(any(r["valid"] for r in results), results)
+            with self.assertRaises(ValueError):
+                estimate_many(obs, scene["empty"], scene["camera"], "cuboid", supported_top_m=[np.nan, 0.064])
+        finally:
+            p.disconnect(client)
+
+    def test_square_is_lifted_and_arrives_in_rear_bin(self):
+        import inspect
+        m = self.module()
+        self.assertIn("supported_top_m", inspect.signature(m.sort_scene).parameters)
+        client = p.connect(p.DIRECT)
+        try:
+            scene = m.build_scene([{"shape": "cuboid", "xy": [0.5, 0], "yaw": 0, "size_m": [0.064, 0.064, 0.07]}], m.LAYOUT)
+            self.assertTrue(m.settle_scene(scene)["settled"])
+            with tempfile.TemporaryDirectory() as directory:
+                result = m.sort_scene(scene, "cuboid", Path(directory), supported_top_m=[0.064, 0.064])
+                self.assertTrue(result["success"], result)
+                self.assertTrue(result["picks"][0]["lift_success"])
+                self.assertTrue(result["picks"][0]["arrival_success"])
+        finally:
+            p.disconnect(client)
+
     def test_carry_arc_checks_arrival_once_without_intermediate_settle(self):
         import json
         m = self.module()
