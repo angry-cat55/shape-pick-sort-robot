@@ -171,12 +171,17 @@ def build_scene(spawns, layout):
     empty = capture(camera)
     objects = []
     for spawn in spawns:
-        z = CONFIG["table_top_m"] + 0.03 + layout["drop_clearance_m"]
+        # 데이터 수집에서는 크기를 지정한다. 기존 실행은 원래 기본 크기를 유지한다.
+        size = spawn.get("size_m", CONFIG["block_size_m"] if spawn["shape"] == "cuboid" else [0.05, 0.06])
+        if (len(size) != (3 if spawn["shape"] == "cuboid" else 2)
+                or any(not math.isfinite(n) or n <= 0 for n in size)):
+            raise ValueError("size_m must contain positive finite dimensions")
+        z = CONFIG["table_top_m"] + size[-1] / 2 + layout["drop_clearance_m"]
         if spawn["shape"] == "cuboid":
-            body = box([n / 2 for n in CONFIG["block_size_m"]], [*spawn["xy"], z], 0.05, [0.9, 0.15, 0.1, 1])
+            body = box([n / 2 for n in size], [*spawn["xy"], z], 0.05, [0.9, 0.15, 0.1, 1])
         else:
-            collision = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.025, height=0.06)
-            visual = p.createVisualShape(p.GEOM_CYLINDER, radius=0.025, length=0.06, rgbaColor=[0.9, 0.15, 0.1, 1])
+            collision = p.createCollisionShape(p.GEOM_CYLINDER, radius=size[0] / 2, height=size[1])
+            visual = p.createVisualShape(p.GEOM_CYLINDER, radius=size[0] / 2, length=size[1], rgbaColor=[0.9, 0.15, 0.1, 1])
             body = p.createMultiBody(0.05, collision, visual, [*spawn["xy"], z])
         # 수평 회전은 생성 시에만 지정한다. 이후 낙하·정착은 물리 계산에 맡긴다.
         p.resetBasePositionAndOrientation(body, [*spawn["xy"], z], p.getQuaternionFromEuler([0, 0, spawn["yaw"]]))

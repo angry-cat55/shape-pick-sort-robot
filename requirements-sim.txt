@@ -1,3 +1,4 @@
 pybullet==3.2.7
 numpy>=2.0,<3
 Pillow>=11,<13
+tqdm>=4.66,<5
