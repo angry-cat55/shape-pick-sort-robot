@@ -2,6 +2,7 @@
 
 import importlib.util
 import math
+import tempfile
 from pathlib import Path
 import sys
 import unittest
@@ -12,6 +13,67 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 
 class MultiSceneTests(unittest.TestCase):
+    def test_camera_marker_matches_view_and_leaves_rgb_unchanged(self):
+        m = self.module()
+        self.assertTrue(hasattr(m, "add_camera_visual"), "카메라 표시 기능이 아직 없습니다")
+        from rgbd_camera import capture
+        import numpy as np
+        client = p.connect(p.DIRECT)
+        try:
+            scene = m.build_scene([], m.LAYOUT)
+            camera = scene["camera"]
+            before = capture(camera)
+            visual = m.add_camera_visual(camera)
+            self.assertEqual(len(visual["footprint"]), 4)
+            for corner in visual["footprint"]:
+                self.assertAlmostEqual(corner[2], 0.30)
+            np.testing.assert_allclose(p.getBasePositionAndOrientation(visual["bodies"][0])[0], camera["eye"])
+            for body in visual["bodies"]:
+                self.assertFalse(p.getCollisionShapeData(body, -1))
+            after = capture(camera)
+            np.testing.assert_array_equal(before["rgb"], after["rgb"])
+            np.testing.assert_array_equal(before["depth"], after["depth"])
+        finally:
+            p.disconnect(client)
+
+    def test_rear_slots_have_valid_static_ik_and_restore_waiting_pose(self):
+        m = self.module()
+        client = p.connect(p.DIRECT)
+        try:
+            scene = m.build_scene([], m.LAYOUT)
+            robot = scene["robot"]
+            before = [p.getJointState(robot, i)[0] for i in range(p.getNumJoints(robot))]
+            report = m.check_reachability(scene)
+            self.assertTrue(report["all_valid"], report)
+            self.assertEqual(len(report["checks"]), 20)
+            self.assertFalse(report["transport_verified"])
+            after = [p.getJointState(robot, i)[0] for i in range(p.getNumJoints(robot))]
+            self.assertEqual(before, after)
+        finally:
+            p.disconnect(client)
+
+    def test_one_camera_observes_regions_and_empty_scene(self):
+        m = self.module()
+        self.assertTrue(hasattr(m, "observe_scene"), "새 구도 촬영 기능이 아직 없습니다")
+        client = p.connect(p.DIRECT)
+        try:
+            scene = m.build_scene(m.sample_spawns(3, 2, 0, m.LAYOUT["region"]), m.LAYOUT)
+            self.assertTrue(m.settle_scene(scene)["settled"])
+            with tempfile.TemporaryDirectory() as directory:
+                result = m.observe_scene(scene, Path(directory))
+                self.assertEqual(result["observed_regions"], 5)
+                self.assertEqual(len(list(Path(directory).glob("crop_*.png"))), 5)
+                # 빈 촬영에서 생성 개수로 관측 개수를 대신하지 않는지 확인한다.
+                for o in scene["objects"]:
+                    p.removeBody(o["body"])
+                empty = m.observe_scene(scene, Path(directory))
+                self.assertEqual(empty["observed_regions"], 0)
+                self.assertEqual(len(list(Path(directory).glob("crop_*.png"))), 0)
+                self.assertEqual(len(list(Path(directory).glob("mask_*.png"))), 0)
+            self.assertTrue(all(len(b["slots"]) == 5 for b in scene["bins"].values()))
+        finally:
+            p.disconnect(client)
+
     def module(self):
         self.assertIsNotNone(importlib.util.find_spec("multi_object_scene"), "새 장면 프로그램이 아직 없습니다")
         import multi_object_scene
@@ -57,6 +119,10 @@ class MultiSceneTests(unittest.TestCase):
         client = p.connect(p.DIRECT)
         try:
             scene = m.build_scene(m.sample_spawns(3, 2, 0, m.LAYOUT["region"]), m.LAYOUT)
+            self.assertTrue("spawn_area_visual" in scene, "생성 구역 바닥의 색상 표시가 아직 없습니다")
+            self.assertFalse(p.getCollisionShapeData(scene["spawn_area_visual"], -1))
+            self.assertNotEqual(p.getVisualShapeData(scene["spawn_area_visual"])[0][7][:3],
+                                p.getVisualShapeData(scene["table"])[0][7][:3])
             initial = [p.getAABB(o["body"])[0][2] for o in scene["objects"]]
             self.assertTrue(all(z > 0.34 for z in initial))
             result = m.settle_scene(scene)
