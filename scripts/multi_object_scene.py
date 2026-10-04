@@ -379,15 +379,19 @@ def sort_scene(scene, shape, output, gui=False):
                 probe.move("RETREAT", [*destination, 0.65], 1.0)
                 # 낙하 후 흔들림이 멎는 시간은 일정하지 않다. 최대 5초 안에 0.5초 연속 정착을 확인한다.
                 probe.start_stage("VERIFY_ARRIVAL")
-                consecutive = 0
+                consecutive = {name: 0 for name in probe.bins}
                 for _ in range(round(5.0 / CONFIG["dt_s"])):
                     sample = probe.step()
-                    consecutive = consecutive + 1 if sample["bin_arrivals"][shape] else 0
-                    if consecutive >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"]):
+                    for name in consecutive:
+                        consecutive[name] = consecutive[name] + 1 if sample["bin_arrivals"][name] else 0
+                    if any(n >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"]) for n in consecutive.values()):
                         break
-                pick["arrival_success"] = consecutive >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
+                # 지정한 상자 도착, 다른 상자 도착, 정착 실패를 구분한다.
+                pick["bin_arrivals"] = {name: n >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
+                                        for name, n in consecutive.items()}
+                pick["arrival_success"] = pick["bin_arrivals"][shape]
                 if not pick["arrival_success"]:
-                    raise RuntimeError("arrival_not_verified")
+                    raise RuntimeError("wrong_bin_arrival" if any(pick["bin_arrivals"].values()) else "arrival_not_verified")
                 remaining.remove(probe.block)
                 return_to_wait(probe, scene)
         except RuntimeError as error:

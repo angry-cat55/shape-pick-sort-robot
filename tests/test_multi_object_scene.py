@@ -13,6 +13,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 
 class MultiSceneTests(unittest.TestCase):
+    def test_wrong_bin_arrival_is_distinguished_from_unsettled_object(self):
+        m = self.module()
+        client = p.connect(p.DIRECT)
+        try:
+            scene = m.build_scene(m.sample_spawns(1, 0, 0, m.LAYOUT["region"]), m.LAYOUT)
+            self.assertTrue(m.settle_scene(scene)["settled"])
+            # 목적지만 다른 상자로 바꾼 실제 운반 대조군이다.
+            scene["bins"]["cuboid"]["slots"] = scene["bins"]["cylinder"]["slots"]
+            with tempfile.TemporaryDirectory() as directory:
+                result = m.sort_scene(scene, "cuboid", Path(directory))
+                self.assertFalse(result["success"])
+                self.assertEqual(result["failure_reason"], "wrong_bin_arrival")
+                self.assertTrue(result["picks"][0]["bin_arrivals"]["cylinder"])
+        finally:
+            p.disconnect(client)
+
     def test_cylinder_surface_height_uses_tight_rotated_bounds(self):
         import io
         m = self.module()
