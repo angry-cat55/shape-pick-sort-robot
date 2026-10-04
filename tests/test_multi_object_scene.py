@@ -13,6 +13,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 
 class MultiSceneTests(unittest.TestCase):
+    def test_carry_arc_checks_arrival_once_without_intermediate_settle(self):
+        import json
+        m = self.module()
+        client = p.connect(p.DIRECT)
+        try:
+            scene = m.build_scene(m.sample_spawns(1, 0, 0, m.LAYOUT["region"]), m.LAYOUT)
+            self.assertTrue(m.settle_scene(scene)["settled"])
+            with tempfile.TemporaryDirectory() as directory:
+                result = m.sort_scene(scene, "cuboid", Path(directory))
+                self.assertTrue(result["success"], result)
+                rows = [json.loads(line) for line in (Path(directory) / "motion.jsonl").read_text().splitlines()]
+                # 실제 운반 기록에서 호 이동 도중의 반복 정착 대기가 사라졌는지 확인한다.
+                stages = [row["stage"] for i, row in enumerate(rows) if i == 0 or row["stage"] != rows[i - 1]["stage"]]
+                self.assertEqual(stages.count("CARRY_ARC_FINAL_SETTLE"), 1)
+        finally:
+            p.disconnect(client)
+
     def test_wrong_bin_arrival_is_distinguished_from_unsettled_object(self):
         m = self.module()
         client = p.connect(p.DIRECT)

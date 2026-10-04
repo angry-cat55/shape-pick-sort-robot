@@ -224,6 +224,20 @@ def observe_scene(scene, output):
 
 
 class SceneProbe(Probe):
+    def command_tcp(self, point, rotation):
+        # 현재 자세 가까이에서 IK를 풀고 모터에 전달한다. 실제 움직임은 step에서 계산된다.
+        rest = [math.atan2(point[1], point[0]), -0.6, 0, -2.0, 0, 1.6, 0.8, 0.04, 0.04]
+        solution = p.calculateInverseKinematics(self.robot, self.tcp, point, rotation,
+                                               lowerLimits=[i[8] for i in self.movable],
+                                               upperLimits=[i[9] for i in self.movable],
+                                               jointRanges=[i[9] - i[8] for i in self.movable],
+                                               restPoses=rest, maxNumIterations=100, residualThreshold=1e-7)
+        values = {info[0]: value for info, value in zip(self.movable, solution)}
+        if any(not self.infos[i][8] <= values[i] <= self.infos[i][9] for i in self.arms):
+            raise RuntimeError("ik_joint_limit")
+        self.arm_targets = [values[i] for i in self.arms]
+        self.hold_arm()
+
     def move(self, stage, position, seconds):
         # 손끝 경로를 작은 구간으로 나누어 현재 자세 가까이에서 IK를 다시 푼다.
         self.start_stage(stage)
@@ -241,22 +255,36 @@ class SceneProbe(Probe):
                 point = [a + blend * (b - a) for a, b in zip(initial, position)]
                 q = start_q + blend * (target_q - start_q)
                 q /= np.linalg.norm(q)
-                # 같은 손끝 위치의 여러 팔 자세 중, 몸통이 목표 방향을 향하는 대기 자세를 선호한다.
-                rest = [math.atan2(point[1], point[0]), -0.6, 0, -2.0, 0, 1.6, 0.8, 0.04, 0.04]
-                solution = p.calculateInverseKinematics(self.robot, self.tcp, point, q.tolist(),
-                                                       lowerLimits=[i[8] for i in self.movable],
-                                                       upperLimits=[i[9] for i in self.movable],
-                                                       jointRanges=[i[9] - i[8] for i in self.movable],
-                                                       restPoses=rest,
-                                                       maxNumIterations=100, residualThreshold=1e-7)
-                values = {info[0]: value for info, value in zip(self.movable, solution)}
-                if any(not self.infos[i][8] <= values[i] <= self.infos[i][9] for i in self.arms):
-                    raise RuntimeError("ik_joint_limit")
-                self.arm_targets = [values[i] for i in self.arms]
-                self.hold_arm()
+                self.command_tcp(point, q.tolist())
             self.step()
         # 마지막 실제 자세에서 다시 풀어 모터의 추종 지연을 줄이고 기존 오차 기준으로 검증한다.
         super().move(stage + "_FINAL", position, 0.3)
+
+    def carry_arc(self, direction, seconds=4.0):
+        self.start_stage("CARRY_ARC")
+        position, rotation = p.getLinkState(self.robot, self.tcp, computeForwardKinematics=True)[4:6]
+        start_angle = math.atan2(position[1], position[0])
+        start_radius = math.hypot(position[0], position[1])
+        start_yaw = p.getEulerFromQuaternion(rotation)[2]
+        end_angle = direction * 2.4
+        ticks = round(seconds / CONFIG["dt_s"])
+        for tick in range(1, ticks + 1):
+            if tick % 4 == 0 or tick == ticks:
+                t = tick / ticks
+                # 호 전체의 출발·도착에서만 감속한다. 중간 각도에서는 멈추지 않는다.
+                blend = t * t * (3 - 2 * t)
+                angle = start_angle + blend * (end_angle - start_angle)
+                transition = min(t / 0.25, 1.0)
+                transition = transition * transition * (3 - 2 * transition)
+                # 초기 물체 위치·손끝 방향에서 운반 반경과 방향으로 부드럽게 연결한다.
+                radius = start_radius + transition * (0.47 - start_radius)
+                yaw = angle + (start_yaw - start_angle) * (1 - transition)
+                point = [radius * math.cos(angle), radius * math.sin(angle), 0.65]
+                self.command_tcp(point, p.getQuaternionFromEuler([math.pi, 0, yaw]))
+            self.step()
+        self.orientation = p.getQuaternionFromEuler([math.pi, 0, end_angle])
+        # 최종 위치 검증과 모든 step의 충돌·낙하 감시는 그대로 유지한다.
+        super().move("CARRY_ARC_FINAL", [0.47 * math.cos(end_angle), 0.47 * math.sin(end_angle), 0.65], 0.3)
 
 
 def scene_probe(scene, log, gui):
@@ -358,9 +386,7 @@ def sort_scene(scene, shape, output, gui=False):
                 # 몸통을 가로지르지 않도록 높은 위치에서 바깥쪽으로 돌아 뒤 상자로 간다.
                 destination = scene["bins"][shape]["slots"][len(report["picks"]) - 1]
                 direction = 1 if destination[1] > 0 else -1
-                for angle in (0, direction * 0.6, direction * 1.2, direction * 1.8, direction * 2.4):
-                    probe.orientation = p.getQuaternionFromEuler([math.pi, 0, angle])
-                    probe.move("CARRY_ARC", [0.47 * math.cos(angle), 0.47 * math.sin(angle), 0.65], 0.8)
+                probe.carry_arc(direction)
                 # 상자에서는 긴 변과 손끝 방향을 나란하게 맞춰 벽과 개방 공간을 확보한다.
                 probe.orientation = p.getQuaternionFromEuler([math.pi, 0, direction * math.pi])
                 probe.move("BIN_ABOVE", [*destination, 0.50], 1.0)
