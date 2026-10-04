@@ -45,6 +45,16 @@ python3 -m venv .venv
 
 직육면체 기본 크기는 6×4×6cm, 원기둥 기본 지름은 5cm, 높이는 6cm입니다. 상자 벽은 8cm입니다. `--cylinder-diameter 0.025 --cylinder-height 0.03`으로 작은 원기둥을 검사할 수 있습니다. 정상10회와 대조군은 GUI 옵션 없이 `--scenario all_transport --trials 10`으로 실행합니다.
 
+## 여러 도형을 배치하는 새 장면
+
+로봇 앞의 청록색 구역에 선택한 개수의 도형을 떨어뜨리고, 뒤쪽에는 두 종류의 상자를 배치합니다. 합계는 1~5개이며, 작은 카메라와 노란 촬영 범위 테두리도 표시합니다.
+
+```bash
+.venv/bin/python scripts/multi_object_scene.py --mode gui --cuboids 3 --cylinders 2 --seed 0 --duration 30
+```
+
+`--cuboids`는 직육면체 개수, `--cylinders`는 원기둥 개수, `--seed`는 랜덤 배치를 재현하는 번호입니다. `--mode direct`는 화면 없이 검증합니다. 현재 새 장면은 배치·정착·물체별 RGB 이미지 저장까지 구현했으며, 뒤쪽 상자의 실제 순차 운반과 CNN 분류는 다음 단계입니다.
+
 ## 프로젝트 목표
 
 - 시뮬레이터에서 생성한 데이터로 사전학습 가중치 없이 작은 CNN을 학습합니다.
