@@ -236,3 +236,18 @@ Python · PyBullet · PyTorch · NumPy · OpenCV · ROS2
 자동 테스트36개 통과, 실제 작은 데이터에서 CPU 축소 학습·평가·그래프·가중치 저장/복원 확인을 완료했습니다. Colab GPU 본 학습 성능은 사용자가 학습한 뒤 평가합니다.
 
 파라미터별 검증 F1 비교 그림에는 선택된 실험을 빨간 별로 표시합니다. 옵티마이저·손실 설정·배치 크기·dropout·학습률·weight decay를 비교하고, 선택 이유는 `selection_reason.txt`, 전체 설정·점수는 `parameter_evidence.csv`에 저장합니다. 이미 학습한 결과에서도 해당 비교 셀만 실행할 수 있습니다. 여러 설정을 동시에 바꾼 결과라 한 파라미터만의 효과로 단정하지 않습니다.
+
+## 정사각형 수정·크기 경계 검증
+
+CNN 수집 범위의 직육면체 가로·세로3/6.4cm × 높이3/7cm(8조합), 원기둥 지름3/6.4cm × 높이3/7cm(4조합)을 검증했습니다. 각각 `(x,y,yaw)=(0.5,0,0), (0.46,-0.12,-0.9), (0.58,0.12,0.7)`에서 단일 물체를 떨어뜨리고 카메라 좌표로 실제 집어 뒤 상자에 놓아 **36/36조건 통과**했습니다. 정사각형·거의 정사각형의 별도9조건도 통과했습니다.
+
+각 실험은 시작 전에 지원 윗면 크기를 설정했고, 생성된 물체의 정답 크기·pose로 카메라 결과를 보정하지 않았습니다. 설정된 크기는 가림 검사에만 쓰며 실제 집는 위치·폭·방향은 RGB-D에서 구합니다. 임의 크기 물체가 섞인 장면의 자동 가림 판별이나 전체 운반 성공률을 보장하는 결과는 아닙니다. 기본 크기의 여러 물체 회귀와 실패 대조군을 포함한 자동 테스트39개도 통과했습니다.
+
+로컬 원본은 `outputs/square-grasp-validation/physical/`와 `outputs/size-edge-validation/initial/`에 있습니다. 크기·초기 위치·회전·소스 해시는 각 `config.json`, 추정/집기/도착 결과는 `result.json`, 시간별 접촉·동작은 `sort/motion.jsonl`에 남겼습니다. 재현 스크립트는 `outputs/square-grasp-validation/run_cases.py`이며 아래 명령은 새 결과 폴더를 사용합니다.
+
+```bash
+.venv/bin/python outputs/square-grasp-validation/run_cases.py outputs/size-edge-validation/recheck edges
+.venv/bin/python -m unittest discover -s tests
+```
+
+원본 로그와 재현 스크립트는 로컬 검증 자료로 Git에서 제외합니다. Git에는 코드·회귀 테스트·의사결정·실험 요약만 올립니다.
