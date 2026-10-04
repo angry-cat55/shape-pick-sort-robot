@@ -4,8 +4,46 @@
 
 ROKEY 부트캠프 개인 프로젝트로, 모델 학습부터 로컬 추론·로봇 제어·결과 검증까지 연결하고 그 흐름을 이해하는 것을 목표로 합니다.
 
-> **현재 상태: 기획·설계 단계**
-> 개발 소스와 실행 데모는 아직 없습니다. 물리 집기 가능성과 모델 성능은 구현·실험 후 확인할 예정입니다.
+> **현재 상태: RGB-D 추정 좌표로 직육면체·수직 원기둥 집기·운반 검증 완료**
+> 커진 기본 도형의 동일 조건 운반을 각각 10회 확인했습니다. 원기둥은 지름·높이·위치 변경과 실패 대조군도 검사했습니다. 도형 종류는 명령으로 지정하며, CNN·ROS2·자동 재시도는 후속 단계입니다.
+
+## 첫 장면 실행
+
+프로젝트 루트에서 실행합니다. GUI는 약 60초 뒤 자동 종료되며, Ctrl+C로 먼저 중단할 수 있습니다.
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-sim.txt
+.venv/bin/python scripts/pybullet_first_run.py --mode gui --steps 14400
+```
+
+화면 없이 검증하려면 `--mode direct --steps 480`을 사용합니다. 설치와 실행 흐름은 [PyBullet 시작 안내](docs/PYBULLET_START_KO.md)에 설명했습니다.
+
+고정 직육면체 집기를 화면으로 보려면 다음을 실행합니다. 약 14초 후 종료됩니다.
+
+```bash
+.venv/bin/python scripts/contact_grasp_probe.py --mode gui --scenario normal
+```
+
+같은 고정 조건에서 정상 집기 10회와 실패 대조군을 재현하려면 `--scenario all --trials 10`을 사용합니다. 이 결과는 물체의 다양한 위치·크기·방향에 대한 성공률이 아닙니다.
+
+파란 상자 운반을 보려면 같은 파일에서 `--mode gui --scenario transport`를 사용합니다. 정상 운반10회와 실패 대조군은 `--scenario all_transport --trials 10`으로 실행합니다.
+
+카메라에서 계산한 좌표로 집고 운반하려면 다음을 실행합니다. 기존 명령은 기본값인 `oracle`(고정 정답 좌표) 실험으로 유지합니다.
+
+```bash
+.venv/bin/python scripts/contact_grasp_probe.py --mode gui --pose-source camera --scenario transport
+```
+
+`--block-x 0.48 --block-y -0.025 --block-yaw -0.35`를 추가하면 물체 초기 위치·회전을 바꿀 수 있습니다. 값은 미터·라디안 단위이며, 현재 검증 범위는 시작 안내에서 확인합니다.
+
+수직 원기둥을 집어 운반하려면 같은 프로그램에 도형 종류를 지정합니다.
+
+```bash
+.venv/bin/python scripts/contact_grasp_probe.py --mode gui --pose-source camera --object-shape cylinder --scenario transport
+```
+
+직육면체 기본 크기는 6×4×6cm, 원기둥 기본 지름은 5cm, 높이는 6cm입니다. 상자 벽은 8cm입니다. `--cylinder-diameter 0.025 --cylinder-height 0.03`으로 작은 원기둥을 검사할 수 있습니다. 정상10회와 대조군은 GUI 옵션 없이 `--scenario all_transport --trials 10`으로 실행합니다.
 
 ## 프로젝트 목표
 
@@ -45,7 +83,7 @@ ROKEY 부트캠프 개인 프로젝트로, 모델 학습부터 로컬 추론·�
 | 파지 | 위에서 접근하는 기하학·제어 기반 파지 |
 | 분류 모델 | 사전학습 없이 직접 학습하는 작은 CNN |
 | 명령·상태 | 터미널 기반 스폰·시작·정지·상태 표시 |
-| ROS2 | 기본 흐름 검증 후 통신 연동 |
+| ROS2 | 필수 범위: 기본 흐름 검증 후 영상·인식·작업 상태 통신 연동 |
 
 첫 버전에서는 강화학습 기반 파지, 여러 물체의 겹침·쌓임, 임의 형상, 실제 로봇 제어를 다루지 않습니다. 로봇·물체·카메라의 상세 설정은 실험 결과에 따라 조정합니다.
 
@@ -59,9 +97,10 @@ ROKEY 부트캠프 개인 프로젝트로, 모델 학습부터 로컬 추론·�
 
 ## 개발 순서
 
-- [ ] Ubuntu 개발 환경 확인 및 프로젝트 전용 환경 구성
-- [ ] 고정 직육면체의 접촉 기반 집기·실패 판정
-- [ ] 상자 운반·내려놓기 검증
+- [x] Ubuntu 기본 환경 확인 및 프로젝트 전용 환경 구성
+- [x] PyBullet 첫 장면의 중력·바닥 충돌·GUI 검증
+- [x] 고정 직육면체의 접촉 기반 집기·실패 판정
+- [x] 고정 물체의 상자 운반·내려놓기 검증
 - [ ] RGB-D 기반 위치·방향 추정 연결
 - [ ] 데이터 자동 생성·CNN 학습 및 평가
 - [ ] 모델 저장·로컬 추론 연결
@@ -80,11 +119,13 @@ ROKEY 부트캠프 개인 프로젝트로, 모델 학습부터 로컬 추론·�
 
 Python · PyBullet · PyTorch · NumPy · OpenCV · ROS2
 
-시뮬레이션·추론은 Ubuntu, 모델 학습은 Google Colab을 사용할 계획입니다. 버전과 설치·실행 명령은 실제 환경 확인 후 문서화합니다.
+시뮬레이션·추론은 Ubuntu, 모델 학습은 Google Colab을 사용할 계획입니다. 첫 실행은 Ubuntu 24.04.5 / Python 3.12.3 / PyBullet 3.2.7에서 검증했습니다. ROS2 Jazzy의 명령과 Python import를 확인했으며, 프로젝트 통신 연결은 후속 단계입니다.
 
 ## 문서
 
 - [설계 명세](docs/superpowers/specs/2026-10-04-shape-sort-design.md)
+- [PyBullet 시작 안내](docs/PYBULLET_START_KO.md)
+- [의사결정 기록](docs/DECISIONS_KO.md)
 - [실험 기록 양식](docs/experiments.csv)
 
 작은 검증 단계별로 구현하고 결과를 명세와 실험 기록에 반영하는 가벼운 SDD 방식으로 진행합니다.
