@@ -1,4 +1,4 @@
-"""로봇 앞 최대 5개 낙하 배치와 뒤쪽 두 상자를 확인한다. 순차 운반은 다음 단계다."""
+"""로봇 앞 최대 5개 낙하 배치와 한 종류 도형의 카메라 순차 운반을 확인한다."""
 
 import argparse
 from datetime import datetime
@@ -16,12 +16,12 @@ import pybullet_data
 import numpy as np
 from PIL import Image
 
-from contact_grasp_probe import CONFIG
-from rgbd_camera import camera_for_angle, capture, components, depth_metres, rgb_crop, save_observation, world_points
+from contact_grasp_probe import CONFIG, Probe, grasp_plan
+from rgbd_camera import camera_for_angle, capture, components, depth_metres, estimate_many, rgb_crop, save_observation, world_points
 
 
 LAYOUT = {
-    "version": "multi-scene-v2-camera-display",
+    "version": "multi-scene-v3-sequential-pick",
     "region": {"x": [0.38, 0.65], "y": [-0.23, 0.23]},
     "gap_m": 0.03,
     "table_bounds": {"x": [-0.60, 0.95], "y": [-0.60, 0.60]},
@@ -142,6 +142,12 @@ def build_scene(spawns, layout):
         p.resetJointState(robot, info[0], value)
         p.setJointMotorControl2(robot, info[0], p.POSITION_CONTROL, targetPosition=value,
                                 force=20 if info[2] == p.JOINT_PRISMATIC else info[10])
+    # Panda URDF의 mimic 관계를 물리 기어로 연결해 두 손가락이 함께 열리고 닫히게 한다.
+    # 로봇의 손가락끼리만 연결한다. 물체를 로봇에 붙이는 제약은 만들지 않는다.
+    fingers = [next(i[0] for i in infos if i[1].decode() == f"panda_finger_joint{n}") for n in (1, 2)]
+    gear = p.createConstraint(robot, fingers[0], robot, fingers[1], p.JOINT_GEAR,
+                              [1, 0, 0], [0, 0, 0], [0, 0, 0])
+    p.changeConstraint(gear, gearRatio=-1, erp=0.1, maxForce=50)
     bins = {}
     # 로봇 뒤(-X)에 바닥 1개·벽 4개로 된 상자를 만든다.
     hx, hy = [n / 2 for n in layout["bin_inner_size_m"]]
@@ -215,6 +221,190 @@ def observe_scene(scene, output):
               "classification_source": "not_implemented", "grasp_geometry_computed": False}
     (output / "observation.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
+
+
+class SceneProbe(Probe):
+    def move(self, stage, position, seconds):
+        # 손끝 경로를 작은 구간으로 나누어 현재 자세 가까이에서 IK를 다시 푼다.
+        self.start_stage(stage)
+        initial, rotation = p.getLinkState(self.robot, self.tcp, computeForwardKinematics=True)[4:6]
+        start_q = np.asarray(rotation)
+        target_q = np.asarray(self.orientation)
+        # 같은 회전을 나타내는 두 부호 중 짧은 회전 방향을 선택한다.
+        if np.dot(start_q, target_q) < 0:
+            target_q = -target_q
+        ticks = round(seconds / CONFIG["dt_s"])
+        for tick in range(1, ticks + 1):
+            if tick % 4 == 0 or tick == ticks:
+                t = tick / ticks
+                blend = t * t * (3 - 2 * t)
+                point = [a + blend * (b - a) for a, b in zip(initial, position)]
+                q = start_q + blend * (target_q - start_q)
+                q /= np.linalg.norm(q)
+                # 같은 손끝 위치의 여러 팔 자세 중, 몸통이 목표 방향을 향하는 대기 자세를 선호한다.
+                rest = [math.atan2(point[1], point[0]), -0.6, 0, -2.0, 0, 1.6, 0.8, 0.04, 0.04]
+                solution = p.calculateInverseKinematics(self.robot, self.tcp, point, q.tolist(),
+                                                       lowerLimits=[i[8] for i in self.movable],
+                                                       upperLimits=[i[9] for i in self.movable],
+                                                       jointRanges=[i[9] - i[8] for i in self.movable],
+                                                       restPoses=rest,
+                                                       maxNumIterations=100, residualThreshold=1e-7)
+                values = {info[0]: value for info, value in zip(self.movable, solution)}
+                if any(not self.infos[i][8] <= values[i] <= self.infos[i][9] for i in self.arms):
+                    raise RuntimeError("ik_joint_limit")
+                self.arm_targets = [values[i] for i in self.arms]
+                self.hold_arm()
+            self.step()
+        # 마지막 실제 자세에서 다시 풀어 모터의 추종 지연을 줄이고 기존 오차 기준으로 검증한다.
+        super().move(stage + "_FINAL", position, 0.3)
+
+
+def scene_probe(scene, log, gui):
+    # 기존 접촉 제어를 새 장면에 연결한다. 초기화를 다시 호출하지 않는다.
+    probe = SceneProbe(gui, log, pose_source="camera")
+    probe.robot, probe.table = scene["robot"], scene["table"]
+    probe.infos = [p.getJointInfo(probe.robot, i) for i in range(p.getNumJoints(probe.robot))]
+    names = {i[1].decode(): i for i in probe.infos}
+    probe.arms = [names[f"panda_joint{i}"][0] for i in range(1, 8)]
+    probe.fingers = [names[f"panda_finger_joint{i}"][0] for i in (1, 2)]
+    probe.tcp = next(i[0] for i in probe.infos if i[12].decode() == "panda_grasptarget")
+    probe.hand = next(i[0] for i in probe.infos if i[12].decode() == "panda_hand")
+    probe.movable = sorted((i for i in probe.infos if i[2] != p.JOINT_FIXED), key=lambda i: i[3])
+    probe.arm_forces = [probe.infos[i][10] for i in probe.arms]
+    probe.arm_targets = scene["home"][:7]
+    probe.bins = {name: {**b, "inner_half_size_m": [s / 2 for s in scene["layout"]["bin_inner_size_m"]]}
+                  for name, b in scene["bins"].items()}
+    probe.supports = [scene["table"]] + [part for b in scene["bins"].values() for part in b["parts"]]
+    for finger in probe.fingers:
+        p.changeDynamics(probe.robot, finger, lateralFriction=CONFIG["lateral_friction"])
+    return probe
+
+
+def return_to_wait(probe, scene):
+    # 모터로 기준 영상과 같은 대기 자세로 돌아온다. 관절을 순간이동시키지 않는다.
+    probe.carry_reference = None
+    probe.gripper(0.04)
+    initial = [p.getJointState(probe.robot, i)[0] for i in probe.arms]
+    probe.start_stage("RETURN_WAIT")
+    for tick in range(1, 721):
+        t = tick / 720
+        blend = t * t * (3 - 2 * t)
+        probe.arm_targets = [a + blend * (b - a) for a, b in zip(initial, scene["home"][:7])]
+        probe.hold_arm()
+        probe.step()
+    probe.wait("WAIT_SETTLE", 0.5)
+    if max(abs(p.getJointState(probe.robot, i)[0] - target) for i, target in zip(probe.arms, scene["home"][:7])) > 0.01:
+        raise RuntimeError("wait_pose_not_reached")
+
+
+def sort_scene(scene, shape, output, gui=False):
+    if shape not in ("cuboid", "cylinder") or any(o["shape"] != shape for o in scene["objects"]):
+        raise ValueError("CNN 연결 전에는 수동 지정한 한 종류만 운반합니다")
+    output.mkdir(parents=True, exist_ok=True)
+    report = {"success": False, "classification_source": "manual_single_shape", "scans": [], "picks": [], "failure_reason": ""}
+    with (output / "motion.jsonl").open("w") as log:
+        probe = scene_probe(scene, log, gui)
+        # ID는 평가 대상의 대응에만 쓴다. 이동 좌표는 매번 카메라에서 구한다.
+        remaining = {o["body"] for o in scene["objects"]}
+        if not remaining:
+            raise ValueError("운반 검증에는 물체가 하나 이상 필요합니다")
+        probe.block = next(iter(remaining))
+        try:
+            for iteration in range(6):
+                observation = capture(scene["camera"])
+                candidates = estimate_many(observation, scene["empty"], scene["camera"], shape)
+                scan_dir = output / f"scan_{iteration:02d}"
+                scan_dir.mkdir(parents=True, exist_ok=True)
+                save_observation(scan_dir, observation, scene["empty"], {"valid": False}, scene["camera"])
+                scan = {"valid_targets": sum(g["valid"] for g in candidates),
+                        "regions": [{k: v for k, v in g.items() if k != "mask"} for g in candidates]}
+                report["scans"].append(scan)
+                (scan_dir / "regions.json").write_text(json.dumps(scan, indent=2) + "\n")
+                for index, candidate in enumerate(candidates):
+                    if "mask" in candidate:
+                        rgb_crop(observation["rgb"], candidate["mask"]).save(scan_dir / f"crop_{index + 1}.png")
+                        Image.fromarray(candidate["mask"].astype(np.uint8) * 255).save(scan_dir / f"mask_{index + 1}.png")
+                valid = [g for g in candidates if g["valid"]]
+                if not valid:
+                    report["success"] = not remaining
+                    report["failure_reason"] = "" if not remaining else "no_valid_target"
+                    break
+                # 영상에서 윗면의 점이 많이 보이는 물체를 먼저 선택한다.
+                geometry = max(valid, key=lambda g: g["top_pixels"])
+                plan = grasp_plan(geometry)
+                pick = {"grasp_plan": plan, "lift_success": False, "arrival_success": False}
+                report["picks"].append(pick)
+                matches = sorted((math.dist(geometry["center_xy_m"], p.getBasePositionAndOrientation(body)[0][:2]), body)
+                                 for body in remaining)
+                if not matches or matches[0][0] > 0.01:
+                    raise RuntimeError("evaluation_target_unmatched")
+                probe.block = matches[0][1]
+                pick["evaluation_body_id"] = probe.block
+                pick["evaluation_xy_error_m"] = matches[0][0]
+                probe.supports = [scene["table"]] + [part for b in scene["bins"].values() for part in b["parts"]] + [o["body"] for o in scene["objects"] if o["body"] != probe.block]
+                probe.drop_via_relative_motion = False
+                x, y, z = plan["position_m"]
+                probe.orientation = p.getQuaternionFromEuler([math.pi, 0, plan["yaw_rad"]])
+                probe.gripper(plan["opening_per_finger_m"])
+                probe.move("APPROACH", [x, y, 0.50], 1.5)
+                probe.move("DESCEND", [x, y, z], 1.2)
+                probe.gripper(0)
+                probe.wait("CLOSE", 0.8)
+                probe.move("LIFT", [x, y, z + 0.10], 1.5)
+                probe.verify_hold(pick)
+                if not pick["lift_success"]:
+                    raise RuntimeError("lift_not_verified")
+                probe.move("CLEARANCE", [x, y, 0.65], 1.0)
+                # 몸통을 가로지르지 않도록 높은 위치에서 바깥쪽으로 돌아 뒤 상자로 간다.
+                destination = scene["bins"][shape]["slots"][len(report["picks"]) - 1]
+                direction = 1 if destination[1] > 0 else -1
+                for angle in (0, direction * 0.6, direction * 1.2, direction * 1.8, direction * 2.4):
+                    probe.orientation = p.getQuaternionFromEuler([math.pi, 0, angle])
+                    probe.move("CARRY_ARC", [0.47 * math.cos(angle), 0.47 * math.sin(angle), 0.65], 0.8)
+                # 상자에서는 긴 변과 손끝 방향을 나란하게 맞춰 벽과 개방 공간을 확보한다.
+                probe.orientation = p.getQuaternionFromEuler([math.pi, 0, direction * math.pi])
+                probe.move("BIN_ABOVE", [*destination, 0.50], 1.0)
+                # 바닥 가까이 내려놓는다. 실제 정착은 접촉과 속도로 따로 확인한다.
+                release_z = max(z + CONFIG["bin_floor_thickness_m"],
+                                scene["bins"][shape]["floor_top"] + CONFIG["bin_release_tcp_floor_clearance_m"])
+                pick["release_tcp_z_m"] = release_z
+                probe.move("BIN_PLACE", [*destination, release_z], 1.2)
+                if probe.drop_via_relative_motion:
+                    raise RuntimeError("drop_during_transport")
+                probe.carry_reference = None
+                # 놓을 때만 낮은 고정 개방 힘을 쓴다. 집는 힘·마찰을 추정하거나 자동 조절하지 않는다.
+                p.setJointMotorControlArray(probe.robot, probe.fingers, p.POSITION_CONTROL,
+                                            targetPositions=[0.04, 0.04], forces=[0.1, 0.1])
+                probe.wait("RELEASE", 1.0)
+                probe.move("RETREAT", [*destination, 0.65], 1.0)
+                # 낙하 후 흔들림이 멎는 시간은 일정하지 않다. 최대 5초 안에 0.5초 연속 정착을 확인한다.
+                probe.start_stage("VERIFY_ARRIVAL")
+                consecutive = 0
+                for _ in range(round(5.0 / CONFIG["dt_s"])):
+                    sample = probe.step()
+                    consecutive = consecutive + 1 if sample["bin_arrivals"][shape] else 0
+                    if consecutive >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"]):
+                        break
+                pick["arrival_success"] = consecutive >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
+                if not pick["arrival_success"]:
+                    raise RuntimeError("arrival_not_verified")
+                remaining.remove(probe.block)
+                return_to_wait(probe, scene)
+        except RuntimeError as error:
+            report["failure_reason"] = str(error)
+        # 앞서 놓은 물체가 나중 동작에 밀려나지 않았는지 최종 상태도 별도로 검사한다.
+        if report["success"]:
+            final = {str(o["body"]): True for o in scene["objects"]}
+            for _ in range(round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])):
+                probe.step()
+                for o in scene["objects"]:
+                    probe.block = o["body"]
+                    final[str(o["body"])] &= probe.measure()["bin_arrivals"][shape]
+            report["final_arrivals"] = final
+            if not all(final.values()):
+                report.update(success=False, failure_reason="final_arrival_not_verified")
+    (output / "sort_result.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
 
 
 def check_reachability(scene):
@@ -295,11 +485,14 @@ def main():
     parser.add_argument("--mode", choices=("direct", "gui"), default="direct")
     parser.add_argument("--duration", type=float, default=20, help="GUI 표시 시간(초)")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--task", choices=("scene", "sort"), default="scene", help="장면 확인 또는 한 종류 순차 운반")
     args = parser.parse_args()
     try:
         validate_counts(args.cuboids, args.cylinders)
     except ValueError as error:
         parser.error(str(error))
+    if args.task == "sort" and args.cuboids and args.cylinders:
+        parser.error("CNN 연결 전에는 --cuboids N --cylinders 0 또는 반대로 지정하세요")
     if not math.isfinite(args.duration) or args.duration <= 0:
         parser.error("duration must be positive and finite")
     if args.mode == "gui" and not os.getenv("DISPLAY"):
@@ -309,10 +502,13 @@ def main():
     (output / "config.json").write_text(json.dumps({
         "layout": LAYOUT, "cuboids": args.cuboids, "cylinders": args.cylinders, "initial_seed": args.seed,
         "dt_s": CONFIG["dt_s"], "block_size_m": CONFIG["block_size_m"], "cylinder_size_m": [0.05, 0.06],
-        "mass_kg": 0.05, "lateral_friction": CONFIG["lateral_friction"], "mode": args.mode,
+        "mass_kg": 0.05, "lateral_friction": CONFIG["lateral_friction"], "mode": args.mode, "task": args.task,
+        "release_open_force_n": 0.1, "perception_size_tolerance_ratio": 0.15,
         "camera": scene_camera(LAYOUT), "pybullet_version": importlib.metadata.version("pybullet"),
         "numpy_version": importlib.metadata.version("numpy"), "pillow_version": importlib.metadata.version("Pillow"),
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "dependency_sha256": {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                              for name in ("rgbd_camera.py", "contact_grasp_probe.py")},
     }, indent=2) + "\n")
     client = p.connect(p.GUI if args.mode == "gui" else p.DIRECT)
     attempts = []
@@ -333,14 +529,25 @@ def main():
         if result["settled"]:
             summary["objects"] = [{**o, "actual_position": p.getBasePositionAndOrientation(o["body"])[0]} for o in scene["objects"]]
             summary["observation"] = observe_scene(scene, output / "observation")
-            summary["reachability"] = check_reachability(scene)
+            # 정적 진단의 관절 reset은 장면 확인에서만 사용한다. 운반에는 호출하지 않는다.
+            if args.task == "scene":
+                summary["reachability"] = check_reachability(scene)
+            else:
+                if args.mode == "gui":
+                    p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+                    p.resetDebugVisualizerCamera(1.9, 70, -35, [0.15, 0, 0.55])
+                    add_camera_visual(scene["camera"])
+                summary["sort"] = sort_scene(scene, "cuboid" if args.cuboids else "cylinder", output / "sort", args.mode == "gui")
         (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
         print("SUMMARY_PATH=" + str(output / "summary.json"), flush=True)
         print("낙하·정착 확인: " + ("PASS" if result["settled"] else "FAIL"), flush=True)
         if result["settled"]:
-            print(f"관측 영역: {summary['observation']['observed_regions']}개 (분류·운반은 다음 단계)", flush=True)
-            print("뒤쪽 자리 정적 IK: " + ("PASS" if summary["reachability"]["all_valid"] else "FAIL"), flush=True)
-        if args.mode == "gui" and result["settled"]:
+            print(f"초기 관측 영역: {summary['observation']['observed_regions']}개", flush=True)
+            if args.task == "scene":
+                print("뒤쪽 자리 정적 IK: " + ("PASS" if summary["reachability"]["all_valid"] else "FAIL"), flush=True)
+            else:
+                print("순차 운반: " + ("PASS" if summary["sort"]["success"] else "FAIL: " + summary["sort"]["failure_reason"]), flush=True)
+        if args.mode == "gui" and result["settled"] and args.task == "scene":
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
             p.resetDebugVisualizerCamera(1.9, 70, -35, [0.15, 0, 0.55])
             add_camera_visual(scene["camera"])
@@ -349,7 +556,8 @@ def main():
                     return 130
                 p.stepSimulation()
                 time.sleep(CONFIG["dt_s"])
-        return 0 if result["settled"] and summary["reachability"]["all_valid"] else 1
+        verified = result["settled"] and (summary["reachability"]["all_valid"] if args.task == "scene" else summary["sort"]["success"])
+        return 0 if verified else 1
     except KeyboardInterrupt:
         return 130
     finally:
