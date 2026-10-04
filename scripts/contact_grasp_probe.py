@@ -250,13 +250,24 @@ class Probe:
         )
         linear, angular = p.getBaseVelocity(self.block)
         aabb = p.getAABB(self.block)
+        shapes = p.getCollisionShapeData(self.block, -1)
+        if len(shapes) == 1 and shapes[0][2] == p.GEOM_CYLINDER:
+            # 검증 전용: 회전 원기둥의 PyBullet AABB는 느슨해서 바닥 아래로 과하게 나올 수 있다.
+            # 원기둥 축의 각 방향 성분으로 실제 표면을 감싸는 경계를 계산한다.
+            height, radius, _ = shapes[0][3]
+            rotation = p.getMatrixFromQuaternion(block_pose[1])
+            axis = [rotation[i] for i in (2, 5, 8)]
+            half = [abs(v) * height / 2 + radius * math.sqrt(max(0, 1 - v * v)) for v in axis]
+            aabb = ([block_pose[0][i] - half[i] for i in range(3)],
+                    [block_pose[0][i] + half[i] for i in range(3)])
         # AABB는 물체를 감싸는 상자다. 물체 전체가 상자 안에 정착했는지 확인한다.
         bin_arrivals = {}
         for name, bin_info in self.bins.items():
-            half = CONFIG["bin_inner_half_size_m"] - CONFIG["bin_inside_margin_m"]
+            # 새 장면의 직사각형 상자도 검사한다. 기존 정사각형 실험의 기본값은 유지한다.
+            halves = bin_info.get("inner_half_size_m", [CONFIG["bin_inner_half_size_m"]] * 2)
             inside = all(
-                aabb[0][axis] >= bin_info["center"][axis] - half
-                and aabb[1][axis] <= bin_info["center"][axis] + half for axis in (0, 1)
+                aabb[0][axis] >= bin_info["center"][axis] - halves[axis] + CONFIG["bin_inside_margin_m"]
+                and aabb[1][axis] <= bin_info["center"][axis] + halves[axis] - CONFIG["bin_inside_margin_m"] for axis in (0, 1)
             )
             bin_arrivals[name] = (
                 inside and abs(aabb[0][2] - bin_info["floor_top"]) < 0.005

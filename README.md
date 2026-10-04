@@ -4,8 +4,8 @@
 
 ROKEY 부트캠프 개인 프로젝트로, 모델 학습부터 로컬 추론·로봇 제어·결과 검증까지 연결하고 그 흐름을 이해하는 것을 목표로 합니다.
 
-> **현재 상태: RGB-D 추정 좌표로 직육면체·수직 원기둥 집기·운반 검증 완료**
-> 커진 기본 도형의 동일 조건 운반을 각각 10회 확인했습니다. 원기둥은 지름·높이·위치 변경과 실패 대조군도 검사했습니다. 도형 종류는 명령으로 지정하며, CNN·ROS2·자동 재시도는 후속 단계입니다.
+> **현재 상태: 카메라 좌표로 한 종류의 여러 도형을 하나씩 뒤쪽 상자로 운반**
+> 하나를 옮기고 팔을 대기 자세로 돌린 뒤 다시 촬영합니다. 도형 종류는 명령으로 지정하며, 혼합 도형의 CNN 분류·ROS2·실패 자동 재시도는 후속 단계입니다.
 
 ## 첫 장면 실행
 
@@ -53,7 +53,65 @@ python3 -m venv .venv
 .venv/bin/python scripts/multi_object_scene.py --mode gui --cuboids 3 --cylinders 2 --seed 0 --duration 30
 ```
 
-`--cuboids`는 직육면체 개수, `--cylinders`는 원기둥 개수, `--seed`는 랜덤 배치를 재현하는 번호입니다. `--mode direct`는 화면 없이 검증합니다. 현재 새 장면은 배치·정착·물체별 RGB 이미지 저장까지 구현했으며, 뒤쪽 상자의 실제 순차 운반과 CNN 분류는 다음 단계입니다.
+`--cuboids`는 직육면체 개수, `--cylinders`는 원기둥 개수, `--seed`는 랜덤 배치를 재현하는 번호입니다. `--mode direct`는 화면 없이 검증합니다. 기본 실행은 장면 확인이며 로봇이 운반하지 않습니다.
+
+**같은 종류를 하나씩 운반하려면** `--task sort`를 추가합니다. GUI는 작업이 끝나면 종료됩니다.
+
+```bash
+.venv/bin/python scripts/multi_object_scene.py --mode gui --task sort --cuboids 5 --cylinders 0 --seed 0
+.venv/bin/python scripts/multi_object_scene.py --mode gui --task sort --cuboids 0 --cylinders 5 --seed 0
+```
+
+CNN 연결 전에는 혼합 종류 운반을 거부합니다. 현재는 기본 크기의 분리된 직육면체·수직 원기둥만 대상으로 합니다. 일부 잘린 윗면은 보류하지만 모든 가림을 알아내는 기능은 아닙니다. 잡을 대상이 없는데 물체가 남아 있으면 완료 대신 실패로 기록합니다.
+
+## 파일 구조와 역할
+
+파일 수가 늘어난 대부분의 이유는 실행 코드에 더해 테스트·설명·실험 기록을 남겼기 때문입니다. 현재 실행 코드의 중심은 `scripts/`의 네 파일입니다.
+
+```text
+shape-pick-sort-robot/
+├── README.md                   프로젝트 소개·실행 명령·현재 상태
+├── requirements-sim.txt        시뮬레이션에 설치할 Python 패키지 목록
+├── .gitignore                 Git에 올리지 않을 파일·폴더 설정
+├── AGENTS.md                  AI 작업 지침 [로컬 전용]
+├── scripts/                   직접 실행하거나 함께 사용하는 코드
+│   ├── pybullet_first_run.py   설치 후 로봇·중력·바닥을 확인하는 첫 실험
+│   ├── contact_grasp_probe.py  한 물체의 접촉 집기·이동·성공/실패 검증
+│   ├── rgbd_camera.py          RGB-D 촬영·영역 분리·좌표/방향/폭 계산
+│   └── multi_object_scene.py   최대5개 배치·카메라 표시·하나씩 운반·재촬영
+├── tests/                     코드를 실행해서 동작을 확인하는 자동 테스트
+│   ├── test_pybullet_first_run.py    첫 장면·입력·종료 확인
+│   ├── test_contact_grasp_probe.py   집기·낙하·상자 도착 대조 실험
+│   ├── test_rgbd_camera.py           깊이 좌표 변환·도형 기하 확인
+│   └── test_multi_object_scene.py   여러 물체 배치·순차 운반·재관측 확인
+├── docs/                      사람이 읽는 설명과 프로젝트 기록
+│   ├── PYBULLET_START_KO.md    설치·단계별 동작·실행법·검증 범위
+│   ├── DECISIONS_KO.md         선택한 방식·다른 후보·선택 이유
+│   ├── FOLLOW_UP_KO.md         강화학습 등 나중에 할 후보와 보류 시점
+│   ├── experiments.csv        실험별 설정·결과·원본 로그 위치 표
+│   ├── HANDOFF_FULL_KO.md      Windows 대화와 프로젝트 배경 [로컬 전용]
+│   ├── PROGRESS.md             최신 진행 상태·인계 기록 [로컬 전용]
+│   └── superpowers/           개발 전에 작성한 설계와 단계별 작업 계획
+│       ├── specs/             무엇을 만들지 정한 설계 명세
+│       │   ├── 2026-10-04-shape-sort-design.md         최초 전체 설계
+│       │   └── 2026-10-04-multi-object-scene-design.md 최대5개·뒤 상자 설계
+│       └── plans/             어떤 순서로 구현·검증할지 정한 계획
+│           ├── 2026-10-04-pybullet-first-run.md 첫 장면
+│           ├── 2026-10-04-fixed-contact-grasp.md 고정 물체 집기
+│           ├── 2026-10-04-bin-transport.md       상자 운반
+│           ├── 2026-10-04-rgbd-camera.md         카메라 좌표 추정
+│           ├── 2026-10-04-cylinder-grasp.md      원기둥 집기
+│           ├── 2026-10-04-multi-object-scene.md  여러 물체 구도
+│           └── 2026-10-05-sequential-pick.md     하나씩 운반·재촬영
+├── outputs/                   실행하면서 만든 영상·설정·결과·접촉 로그
+├── .venv/                     이 프로젝트의 Python 실행 환경과 설치 패키지
+├── .superpowers/              AI 작업 도구의 임시 진행 기록
+└── .git/                      Git이 관리하는 커밋·브랜치 기록
+```
+
+`multi_object_scene.py`가 전체 작업 순서를 진행하고, `rgbd_camera.py`에서 좌표를 받아 `contact_grasp_probe.py`의 제어·검증을 재사용합니다. `pybullet_first_run.py`는 초기 설치 확인용으로 남겨둡니다.
+
+`outputs/`, `.venv/`, `.superpowers/`와 로컬 전용 문서는 Git 업로드 대상에서 제외합니다. 여러 물체 설계·계획과 순차 운반 계획 세 문서도 이전 제외 요청에 따라 현재 로컬에만 남겨뒀습니다. CNN 학습 코드와 ROS2 패키지는 아직 없으며 이후 단계에서 추가합니다.
 
 ## 프로젝트 목표
 
@@ -88,7 +146,7 @@ python3 -m venv .venv
 |---|---|
 | 시뮬레이션 | PyBullet |
 | 로봇 | Franka Panda와 두 손가락 그리퍼 후보 |
-| 물체 | 직육면체·수직 원기둥, 한 번에 하나 |
+| 물체 | 직육면체·수직 원기둥 합계 최대 5개, 하나씩 운반 |
 | 관찰 | 고정 가상 RGB-D 카메라 |
 | 파지 | 위에서 접근하는 기하학·제어 기반 파지 |
 | 분류 모델 | 사전학습 없이 직접 학습하는 작은 CNN |
@@ -111,7 +169,8 @@ python3 -m venv .venv
 - [x] PyBullet 첫 장면의 중력·바닥 충돌·GUI 검증
 - [x] 고정 직육면체의 접촉 기반 집기·실패 판정
 - [x] 고정 물체의 상자 운반·내려놓기 검증
-- [ ] RGB-D 기반 위치·방향 추정 연결
+- [x] RGB-D 기반 위치·방향 추정 연결
+- [x] 한 종류 여러 물체의 순차 운반과 물체마다 재촬영
 - [ ] 데이터 자동 생성·CNN 학습 및 평가
 - [ ] 모델 저장·로컬 추론 연결
 - [ ] 전체 작업과 실패 대응 통합

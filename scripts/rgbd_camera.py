@@ -168,6 +168,40 @@ def estimate(observation, empty, camera, object_shape="cuboid"):
     }
 
 
+def estimate_many(observation, empty, camera, object_shape):
+    # 생성 목록 없이 깊이 차이로 영역을 분리한다. 좌표 계산은 기존 함수를 재사용한다.
+    depth = observation["depth"]
+    if (depth.shape != (camera["height"], camera["width"]) or depth.shape != empty["depth"].shape
+            or any(not np.isfinite(d).all() or np.any((d < 0) | (d > 1)) for d in (depth, empty["depth"]))):
+        return [{"valid": False, "failure_reason": "invalid_depth"}]
+    points = world_points(observation)
+    mask = depth_metres(empty["depth"], camera) - depth_metres(depth, camera) > camera["depth_difference_m"]
+    for axis, (low, high) in enumerate(camera["roi_xy_m"]):
+        mask &= (points[..., axis] > low) & (points[..., axis] < high)
+    mask &= (points[..., 2] > camera["table_top_m"] + 0.008) & (depth < 1)
+    results = []
+    for group in components(mask):
+        pixels = np.asarray(group)
+        region = np.zeros_like(mask)
+        region[pixels[:, 0], pixels[:, 1]] = True
+        isolated = dict(observation)
+        isolated["depth"] = np.where(region, depth, empty["depth"])
+        geometry = estimate(isolated, empty, camera, object_shape)
+        if geometry["valid"]:
+            top = points[region]
+            top = top[np.abs(top[:, 2] - geometry["top_z_m"]) <= camera["top_band_m"]]
+            yaw = geometry["yaw_rad"]
+            axes = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
+            spans = np.ptp(top[:, :2] @ axes, axis=0)
+            # 이번 장면의 지원 크기와 비교한다. 잘린 윗면·붙은 영역의 일부를 보류할 수 있다.
+            # 개별 생성 정답은 읽지 않는다. 임의 크기와 모든 가림을 판별하는 검사는 아니다.
+            expected = np.array([0.06, 0.04] if object_shape == "cuboid" else [0.05, 0.05])
+            if np.any(np.abs(spans - expected) > expected * 0.15):
+                geometry = {"valid": False, "failure_reason": "incomplete_or_merged_surface"}
+        results.append({**geometry, "mask": region})
+    return results
+
+
 def rgb_crop(rgb, mask, size=64):
     # 같은 영역·여백·크기 변환을 이후 학습 데이터와 로컬 추론에서 재사용한다.
     v, u = np.where(mask)
