@@ -20,7 +20,7 @@ build/
 install/
 log/
 
-# Generated datasets, checkpoints and local run artifacts
+# Generated RGB crops, manifests, dataset zip files, checkpoints and run artifacts
 /data/
 /checkpoints/
 /outputs/
@@ -29,3 +29,6 @@ log/
 .DS_Store
 Thumbs.db
 .idea/
+
+# Notebook editor checkpoints (the source notebook stays in Git)
+.ipynb_checkpoints/
