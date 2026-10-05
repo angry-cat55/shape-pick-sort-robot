@@ -139,9 +139,16 @@ class MultiSceneTests(unittest.TestCase):
             hidden = estimate_many(capture(scene["camera"]), scene["empty"], scene["camera"], "cuboid")
             self.assertFalse(any(r["valid"] for r in hidden), hidden)
             with tempfile.TemporaryDirectory() as directory:
-                result = m.sort_scene(scene, "cuboid", Path(directory))
+                # 재시도를 끄면 기존 첫 실패 코드가 유지된다.
+                result = m.sort_scene(scene, "cuboid", Path(directory), max_retries=0)
                 self.assertFalse(result["success"])
                 self.assertEqual(result["failure_reason"], "no_valid_target")
+                # 기본 모드도 가려진 물체를 완료 처리하지 않고, 재촬영 한도에서 종료한다.
+                bounded = m.sort_scene(scene, "cuboid", Path(directory)/'retry', max_retries=2)
+                self.assertFalse(bounded["success"])
+                self.assertEqual(bounded["picks"], [])
+                self.assertEqual(bounded["failure_reason"], "retry_limit_reached")
+                self.assertEqual(len(bounded["scans"]), 3)
             # 관측 대조 실험에서만 판을 제거하고, 재촬영으로 물체가 드러나는지 확인한다.
             p.removeBody(screen)
             visible = estimate_many(capture(scene["camera"]), scene["empty"], scene["camera"], "cuboid")
