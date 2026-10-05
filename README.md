@@ -10,15 +10,15 @@ ROKEY 부트캠프 개인 프로젝트로, 모델 학습부터 로컬 추론·�
 
 ## 첫 장면 실행
 
-프로젝트 루트에서 실행합니다. GUI는 약 60초 뒤 자동 종료되며, Ctrl+C로 먼저 중단할 수 있습니다.
+프로젝트 루트에서 실행합니다. 첫 장면은 약 20초 동안 표시되며, Ctrl+C로 먼저 중단할 수 있습니다.
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-sim.txt
-.venv/bin/python scripts/pybullet_first_run.py --mode gui --steps 14400
+.venv/bin/python scripts/multi_object_scene.py --mode gui --task scene --cuboids 3 --cylinders 2 --duration 20
 ```
 
-화면 없이 검증하려면 `--mode direct --steps 480`을 사용합니다. 설치와 실행 흐름은 [PyBullet 시작 안내](docs/PYBULLET_START_KO.md)에 설명했습니다.
+창 없이 장면 배치·정착을 확인하려면 `--mode direct`로 바꿉니다. CNN 분류·운반 실행은 아래에서 안내합니다.
 
 고정 직육면체 집기를 화면으로 보려면 다음을 실행합니다. 약 14초 후 종료됩니다.
 
@@ -36,7 +36,7 @@ python3 -m venv .venv
 .venv/bin/python scripts/contact_grasp_probe.py --mode gui --pose-source camera --scenario transport
 ```
 
-`--block-x 0.48 --block-y -0.025 --block-yaw -0.35`를 추가하면 물체 초기 위치·회전을 바꿀 수 있습니다. 값은 미터·라디안 단위이며, 현재 검증 범위는 시작 안내에서 확인합니다.
+`--block-x 0.48 --block-y -0.025 --block-yaw -0.35`를 추가하면 물체 초기 위치·회전을 바꿀 수 있습니다. 값은 미터·라디안 단위이며, 검증 조건과 결과는 `docs/experiments.csv`에 기록합니다.
 
 수직 원기둥을 집어 운반하려면 같은 프로그램에 도형 종류를 지정합니다.
 
@@ -96,7 +96,7 @@ python3 -m venv .venv
 
 **이번 검증:** 랜덤 크기12회와 최소·최대 크기8회, 합계20회 실행에서100개 물체의 분류·집기·상자 도착·최종 정착을 확인했습니다. 일부 초기 배치는 다음seed로 재생성되어 같은 장면이 반복되었으며, 이 결과가 모든 랜덤 배치의 성공률을 뜻하지는 않습니다. 랜덤 크기 운반은 접촉 계산을100회에서200회로 늘려 원기둥의 바닥 접촉 흔들림을 줄였습니다. 마지막 확인은 최대5초 기다리며, 모든 물체가 기존 속도·바닥 접촉 기준을0.5초 연속 만족해야 통과합니다.
 
-전체 자동 테스트는 아래 명령으로 실행합니다. 이번 환경에서는62개가 통과했으며, 개인 모델 파일이 없는 환경에서는 모델을 쓰는 일부 테스트가 건너뛰어집니다.
+전체 자동 테스트는 아래 명령으로 실행합니다. 공개 파일만으로 구성한 환경에서는58개가 통과했으며, 개인 모델 파일이 없는 환경에서는 모델을 쓰는 일부 테스트가 건너뛰어집니다.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
@@ -124,64 +124,33 @@ python3 -m venv .venv
 
 ## 파일 구조와 역할
 
-파일 수가 늘어난 대부분의 이유는 실행 코드에 더해 테스트·설명·실험 기록을 남겼기 때문입니다. 현재 실행 코드의 중심은 `scripts/`에 있으며, 학습 코드는 `notebooks/`에 있습니다.
+실행 코드는 `scripts/`, 자동 검증은 `tests/`, CNN 학습 코드는 `notebooks/`에 있습니다.
 
 ```text
 shape-pick-sort-robot/
-├── README.md                   프로젝트 소개·실행 명령·현재 상태
-├── requirements-sim.txt        시뮬레이션에 설치할 Python 패키지 목록
-├── requirements-inference.txt  로컬 CNN 추론에 필요한 CPU PyTorch
-├── .gitignore                 Git에 올리지 않을 파일·폴더 설정
-├── AGENTS.md                  AI 작업 지침 [로컬 전용]
-├── scripts/                   직접 실행하거나 함께 사용하는 코드
-│   ├── pybullet_first_run.py   설치 후 로봇·중력·바닥을 확인하는 첫 실험
-│   ├── contact_grasp_probe.py  한 물체의 접촉 집기·이동·성공/실패 검증
-│   ├── rgbd_camera.py          RGB-D 촬영·영역 분리·좌표/방향/폭 계산
-│   ├── multi_object_scene.py   최대5개 배치·카메라 표시·하나씩 운반·재촬영
-│   ├── terminal_ko.py          터미널 단계·실패 원인·도움말의 공통 한글 표시
-│   ├── cnn_inference.py        Colab 모델 복원·입력 정규화·도형 종류 예측
-│   └── collect_cnn_data.py     크기·회전 랜덤 RGB 수집·장면별 데이터 분할
-├── tests/                     코드를 실행해서 동작을 확인하는 자동 테스트
-│   ├── test_pybullet_first_run.py    첫 장면·입력·종료 확인
-│   ├── test_contact_grasp_probe.py   집기·낙하·상자 도착 대조 실험
-│   ├── test_rgbd_camera.py           깊이 좌표 변환·도형 기하 확인
-│   ├── test_multi_object_scene.py   여러 물체 배치·순차 운반·재관측 확인
-│   ├── test_random_size_sort.py   랜덤 치수·크기 경계·가림/붙은 영역 보류 확인
-│   ├── test_cnn_inference.py       학습·추론 일치·불확실한 예측·혼합 운반 확인
-│   └── test_cnn_data.py             크기·라벨·데이터 분할 확인
-├── notebooks/                 Colab에서 실행하는 학습 코드
-│   └── shape_cnn_colab.ipynb   랜덤 탐색·모델 저장·성능 시각화
-├── docs/                      사람이 읽는 설명과 프로젝트 기록
-│   ├── PYBULLET_START_KO.md    설치·단계별 동작·실행법·검증 범위
-│   ├── DECISIONS_KO.md         선택한 방식·다른 후보·선택 이유
-│   ├── FOLLOW_UP_KO.md         강화학습 등 나중에 할 후보와 보류 시점
-│   ├── experiments.csv        실험별 설정·결과·원본 로그 위치 표
-│   ├── HANDOFF_FULL_KO.md      Windows 대화와 프로젝트 배경 [로컬 전용]
-│   ├── PROGRESS.md             최신 진행 상태·인계 기록 [로컬 전용]
-│   ├── images/cnn/            README에 넣은 대표 CNN 결과 그래프4장
-│   └── superpowers/           개발 전에 작성한 설계와 단계별 작업 계획
-│       ├── specs/             무엇을 만들지 정한 설계 명세
-│       │   ├── 2026-10-04-shape-sort-design.md         최초 전체 설계
-│       │   └── 2026-10-04-multi-object-scene-design.md 최대5개·뒤 상자 설계
-│       └── plans/             어떤 순서로 구현·검증할지 정한 계획
-│           ├── 2026-10-04-pybullet-first-run.md 첫 장면
-│           ├── 2026-10-04-fixed-contact-grasp.md 고정 물체 집기
-│           ├── 2026-10-04-bin-transport.md       상자 운반
-│           ├── 2026-10-04-rgbd-camera.md         카메라 좌표 추정
-│           ├── 2026-10-04-cylinder-grasp.md      원기둥 집기
-│           ├── 2026-10-04-multi-object-scene.md  여러 물체 구도
-│           └── 2026-10-05-sequential-pick.md     하나씩 운반·재촬영
-├── data/                      CNN 사진·라벨·데이터 zip [Git 제외]
-├── checkpoints/               Colab 최종 모델·설정 [Git 제외]
-├── outputs/                   실행하면서 만든 영상·설정·결과·접촉 로그
-├── .venv/                     이 프로젝트의 Python 실행 환경과 설치 패키지
-├── .superpowers/              AI 작업 도구의 임시 진행 기록
-└── .git/                      Git이 관리하는 커밋·브랜치 기록
+├── README.md                   프로젝트 소개·설치·실행 방법
+├── requirements-sim.txt        시뮬레이션 패키지
+├── requirements-inference.txt  CPU CNN 추론 패키지
+├── scripts/
+│   ├── multi_object_scene.py   배치·카메라 인식·운반·실패 대응
+│   ├── contact_grasp_probe.py  공통 로봇 제어·접촉 검증·단일 물체 실험
+│   ├── rgbd_camera.py          깊이 영역 분리·좌표·방향·폭 계산
+│   ├── cnn_inference.py        학습 모델 복원·이미지 분류
+│   ├── collect_cnn_data.py     학습 이미지 수집·데이터 분할
+│   └── terminal_ko.py          터미널 단계·오류의 한국어 표시
+├── tests/                     인식·집기·재시도·데이터 등의 자동 검증
+├── notebooks/
+│   └── shape_cnn_colab.ipynb   CNN 학습·랜덤 탐색·성능 시각화
+└── docs/
+    ├── DECISIONS_KO.md         선택한 방식·다른 후보·이유
+    ├── FOLLOW_UP_KO.md         후속 후보와 보류한 시점
+    ├── experiments.csv        검증 조건·결과 기록
+    └── images/cnn/            대표 CNN 결과 그래프
 ```
 
-`multi_object_scene.py`가 전체 작업 순서를 진행하고, `rgbd_camera.py`에서 좌표를 받아 `contact_grasp_probe.py`의 제어·검증을 재사용합니다. `pybullet_first_run.py`는 초기 설치 확인용으로 남겨둡니다.
+`multi_object_scene.py`가 전체 순서를 진행하고, `rgbd_camera.py`의 좌표와 `contact_grasp_probe.py`의 제어·검증을 사용합니다.
 
-`outputs/`, `.venv/`, `.superpowers/`와 로컬 전용 문서는 Git 업로드 대상에서 제외합니다. 여러 물체 설계·계획과 순차 운반 계획 세 문서도 이전 제외 요청에 따라 현재 로컬에만 남겨뒀습니다. CNN 데이터 수집 코드와 Colab 학습 노트북을 추가했습니다. CNN 로컬 추론과 혼합 운반을 연결했으며 ROS2 패키지는 후속 단계입니다.
+
 
 ## 프로젝트 목표
 
@@ -262,12 +231,10 @@ Python · PyBullet · PyTorch · NumPy · OpenCV · ROS2
 
 ## 문서
 
-- [설계 명세](docs/superpowers/specs/2026-10-04-shape-sort-design.md)
-- [PyBullet 시작 안내](docs/PYBULLET_START_KO.md)
 - [의사결정 기록](docs/DECISIONS_KO.md)
 - [실험 기록 양식](docs/experiments.csv)
 
-작은 검증 단계별로 구현하고 결과를 명세와 실험 기록에 반영하는 가벼운 SDD 방식으로 진행합니다.
+작은 단계별로 구현하고 검증 결과를 실험 기록에 남깁니다.
 
 ## CNN 데이터 수집과 Colab 학습
 

@@ -35,7 +35,7 @@ class TerminalKoreanTests(unittest.TestCase):
         self.assertEqual(failure_name('drop_during_transport'), '운반 중 물체가 떨어짐')
 
     def test_all_cli_help_and_argument_errors_are_korean(self):
-        for name in ['pybullet_first_run.py', 'contact_grasp_probe.py', 'multi_object_scene.py', 'collect_cnn_data.py']:
+        for name in ['contact_grasp_probe.py', 'multi_object_scene.py', 'collect_cnn_data.py']:
             script = ROOT/'scripts'/name
             help_result = subprocess.run([sys.executable, str(script), '--help'], capture_output=True, text=True)
             self.assertEqual(help_result.returncode, 0, help_result.stderr)
