@@ -5,6 +5,12 @@
 # Personal CNN learning notes
 /docs/CNN-Based Shape CLassification.txt
 
+# Completed AI plans and initial installation experiments (kept locally)
+/docs/superpowers/
+/docs/PYBULLET_START_KO.md
+/scripts/pybullet_first_run.py
+/tests/test_pybullet_first_run.py
+
 # Python environments and generated files
 .venv/
 venv/
