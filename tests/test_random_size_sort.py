@@ -46,6 +46,20 @@ class RandomSizeTests(unittest.TestCase):
                 self.assertLess(math.dist(results[0]['center_xy_m'],actual_xy),0.002)
         finally:p.disconnect(client)
 
+    def test_maximum_cylinder_at_pixel_edge_positions_keeps_gripper_limit(self):
+        client = p.connect(p.DIRECT)
+        try:
+            for xy, yaw in [([0.4473142154,-0.0162841825],-2.0202928230),
+                            ([0.4591001179,-0.0955955138],-2.7674220246),
+                            ([0.4792,-0.152],-1.7)]:
+                scene = build_scene([{'shape':'cylinder','size_m':[0.064,0.07],'xy':xy,'yaw':yaw}],LAYOUT)
+                self.assertTrue(settle_scene(scene)['settled'])
+                candidates = estimate_many(capture(scene['camera']),scene['empty'],scene['camera'],
+                                           'cylinder',size_range_m=(0.064,0.064,0.07,0.07))
+                self.assertTrue(candidates[0]['valid'],candidates[0])
+                self.assertLessEqual(candidates[0]['width_m'],0.065)
+        finally:p.disconnect(client)
+
     def test_random_policy_rejects_cut_surface_and_merged_neighbours(self):
         from rgbd_camera import world_points
         client = p.connect(p.DIRECT)

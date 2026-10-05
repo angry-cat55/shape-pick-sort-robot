@@ -117,16 +117,44 @@ def cuboid_geometry(xy):
 
 
 def cylinder_geometry(xy):
-    # 수직 원기둥의 원형 윗면에는 긴 방향이 없다. X·Y 양 끝의 중앙을 쓴다.
     low, high = xy.min(axis=0), xy.max(axis=0)
     diameters = high - low
     diameter = float(diameters.mean())
-    # 원형이면 X·Y 지름이 비슷해야 한다. 큰 차이는 잘림·기울어짐 등의 후보로 거부한다.
     if diameter <= 0 or abs(diameters[0] - diameters[1]) > 0.20 * diameter:
         return {"valid": False, "failure_reason": "non_circular_top"}
-    # ponytail: 전체 윗면이 보이는 수직 원기둥에 한정한다. 가려진 원은 별도 추정이 필요하다.
-    return {"valid": True, "center_xy_m": ((low + high) / 2).tolist(),
-            "width_m": diameter, "diameter_xy_m": diameters.tolist(), "yaw_rad": 0.0}
+    # XY 양 끝만 쓰면 한 픽셀 차이로 폭 상한을 넘을 수 있다. 여러 외곽 점에 원을 맞춘다.
+    ordered = sorted(set(map(tuple, xy)))
+    def cross(origin, a, b):
+        return (a[0]-origin[0])*(b[1]-origin[1]) - (a[1]-origin[1])*(b[0]-origin[0])
+    lower, upper = [], []
+    # 내부 점을 제외하고 상면을 둘러싸는 테두리인 볼록 껍질만 남긴다.
+    for point in ordered:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+    for point in reversed(ordered):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+    boundary = np.asarray(lower[:-1] + upper[:-1])
+    if len(boundary) < 12:
+        return {"valid": False, "failure_reason": "non_circular_top"}
+    origin = boundary.mean(axis=0)
+    local = boundary - origin
+    # (x-cx)²+(y-cy)²=r²를 정리한 선형식을 최소제곱으로 풀어 중심과 반지름을 구한다.
+    solution = np.linalg.lstsq(np.column_stack((2*local, np.ones(len(local)))),
+                               np.sum(local**2, axis=1), rcond=None)[0]
+    center = solution[:2]
+    radius_squared = solution[2] + np.dot(center, center)
+    if radius_squared <= 0:
+        return {"valid": False, "failure_reason": "non_circular_top"}
+    radius = np.sqrt(radius_squared)
+    residual = float(np.max(np.abs(np.linalg.norm(local-center, axis=1)-radius)))
+    # 원과 맞지 않는 경계는 보류한다. 가려진 부분을 무조건 완전한 원으로 복원하지 않는다.
+    if residual > 0.0015:
+        return {"valid": False, "failure_reason": "non_circular_top"}
+    return {"valid": True, "center_xy_m": (center+origin).tolist(), "width_m": float(2*radius),
+            "diameter_xy_m": diameters.tolist(), "circle_boundary_error_m": residual, "yaw_rad": 0.0}
 
 
 def estimate(observation, empty, camera, object_shape="cuboid"):
@@ -188,7 +216,8 @@ def variable_surface_check(points, region, foreground, geometry, spans, camera, 
     minimum, maximum, min_height, max_height = size_range_m
     # 영상 경계 오차1.5mm만 허용한다. 생성된 개별 치수는 읽지 않는다.
     tolerance = 0.0015
-    if (np.any(spans < minimum - tolerance) or np.any(spans > maximum + tolerance)
+    observed_size = np.full(2, geometry['width_m']) if geometry['object_shape'] == 'cylinder' else spans
+    if (np.any(observed_size < minimum - tolerance) or np.any(observed_size > maximum + tolerance)
             or not min_height - tolerance <= geometry['height_m'] <= max_height + tolerance):
         return 'unsupported_geometry'
     center = np.asarray(geometry['center_xy_m'])
