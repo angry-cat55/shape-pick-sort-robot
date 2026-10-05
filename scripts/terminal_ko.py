@@ -4,6 +4,11 @@ import sys
 
 
 STAGES = {
+    'RECOVERY_LOWER': '집기 실패 후 원래 접근 높이로 내려놓기',
+    'RECOVERY_RELEASE': '복구를 위해 손가락 열고 기다리기',
+    'RECOVERY_CLEARANCE': '복귀를 위한 안전 높이로 후퇴',
+    'RECOVERY_ARC': '로봇 바깥쪽 호를 따라 앞쪽으로 복귀',
+    'REOBSERVE_WAIT': '보류된 후보를 다시 촬영하기 전 대기',
     'SETUP': '장면 준비', 'SETTLE': '물체 안정화 대기', 'OBSERVE': '카메라 촬영·좌표 계산',
     'APPROACH': '물체 위로 접근', 'DESCEND': '집을 높이로 내려가기', 'CLOSE': '손가락 닫기',
     'LIFT': '물체 들어 올리기', 'VERIFY_LIFT': '물체 들림·유지 확인',
@@ -26,6 +31,11 @@ NAMES = {
     'wrong_bin': '다른 상자 도착 대조', 'camera_empty': '빈 장면 탐지 대조',
 }
 FAILURES = {
+    'retry_limit_reached': '허용한 재시도 횟수를 모두 사용함',
+    'retry_target_not_found': '이전 영상 중심 근처에서 재시도 대상을 찾지 못함',
+    'retry_target_ambiguous': '이전 영상 중심 근처에 후보가 여러 개여서 재시도 대상을 구별하지 못함',
+    'recovery_failed': '안전 복귀 중 오류가 발생하여 중단함',
+    'task_iteration_limit': '작업의 최대 반복 횟수에 도달함',
     '': '없음', 'arm_table_collision': '팔이 작업대와 충돌함', 'arm_bin_collision': '팔이 상자와 충돌함',
     'ik_joint_limit': '역기구학 결과가 관절 허용 각도를 벗어남', 'tcp_not_reached': '손끝이 목표 자세에 도착하지 못함',
     'wait_pose_not_reached': '촬영용 대기 자세에 도착하지 못함', 'evaluation_target_unmatched': '추정 대상과 검증 대상을 대응하지 못함',

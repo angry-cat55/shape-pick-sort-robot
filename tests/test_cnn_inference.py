@@ -92,6 +92,10 @@ class CnnInferenceTests(unittest.TestCase):
                 result = sort_scene(scene, None, folder/'sort', classifier=classifier)
                 self.assertFalse(result['success'])
                 self.assertEqual(result['picks'], [])
+                # 같은 낮은 점수가 계속되면 재촬영 두 번 뒤 끝내고 집기를 시작하지 않는다.
+                self.assertEqual(len(result['scans']), 3)
+                self.assertEqual(len(result['recoveries']), 2)
+                self.assertEqual(result['failure_reason'], 'retry_limit_reached')
                 # 분류기를 연결해도 손상된 깊이값을 집기 좌표로 사용하면 안 된다.
                 invalid = {**observation, 'depth': np.full_like(observation['depth'], np.nan)}
                 rejected = estimate_many(invalid, scene['empty'], scene['camera'], None, classifier=classifier)
