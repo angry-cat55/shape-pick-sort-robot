@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image
 
 from contact_grasp_probe import CONFIG, Probe, grasp_plan
-from rgbd_camera import camera_for_angle, capture, components, depth_metres, estimate_many, rgb_crop, save_observation, world_points
+from rgbd_camera import camera_for_angle, capture, components, depth_metres, estimate_many, rgb_crop, save_observation, world_points, validate_size_range
 
 
 LAYOUT = {
@@ -39,16 +39,23 @@ def validate_counts(cuboids, cylinders):
         raise ValueError("도형 개수는 각각 0 이상, 합계 1~5개여야 합니다")
 
 
-def sample_spawns(cuboids, cylinders, seed, region):
+def sample_spawns(cuboids, cylinders, seed, region, size_range_m=None):
     validate_counts(cuboids, cylinders)
+    if size_range_m is not None:
+        minimum, maximum, min_height, max_height = validate_size_range(size_range_m)
     rng = random.Random(seed)
     spawns = []
     for shape in ["cuboid"] * cuboids + ["cylinder"] * cylinders:
+        # 학습 데이터와 같은 범위에서 개별 치수를 정한다. 기본 모드의 난수 순서는 유지한다.
+        size = ([rng.uniform(minimum, maximum) for _ in range(2 if shape == "cuboid" else 1)]
+                + [rng.uniform(min_height, max_height)]) if size_range_m is not None else None
+        width, length = size[:2] if size is not None and shape == "cuboid" else (0.06, 0.04)
+        diameter = size[0] if size is not None and shape == "cylinder" else 0.05
         for _ in range(LAYOUT["max_placement_attempts"]):
             yaw = rng.uniform(-math.pi, math.pi)
             # 회전한 직육면체의 모서리까지 감싸는 가로·세로 반길이를 계산한다.
-            half = [(abs(math.cos(yaw)) * 0.06 + abs(math.sin(yaw)) * 0.04) / 2,
-                    (abs(math.sin(yaw)) * 0.06 + abs(math.cos(yaw)) * 0.04) / 2] if shape == "cuboid" else [0.026 * (abs(math.cos(yaw)) + abs(math.sin(yaw)))] * 2
+            half = [(abs(math.cos(yaw)) * width + abs(math.sin(yaw)) * length) / 2,
+                    (abs(math.sin(yaw)) * width + abs(math.cos(yaw)) * length) / 2] if shape == "cuboid" else [(diameter / 2 + 0.001 if size is not None else 0.026) * (abs(math.cos(yaw)) + abs(math.sin(yaw)))] * 2
             # 원기둥도 PyBullet의 회전된 충돌 AABB와 1mm 여유를 고려해 보수적으로 배치한다.
             limits = [(region[k][0] + half[a] + 0.002, region[k][1] - half[a] - 0.002) for a, k in enumerate(("x", "y"))]
             if any(low > high for low, high in limits):
@@ -57,7 +64,10 @@ def sample_spawns(cuboids, cylinders, seed, region):
             # 한 축 이상에서 물체 사이에 손가락을 위한 3cm 간격을 남긴다.
             if all(any(abs(xy[a] - other["xy"][a]) >= half[a] + other["half_xy"][a] + LAYOUT["gap_m"] + 0.002
                        for a in (0, 1)) for other in spawns):
-                spawns.append({"shape": shape, "xy": xy, "yaw": yaw, "half_xy": half})
+                spawn = {"shape": shape, "xy": xy, "yaw": yaw, "half_xy": half}
+                if size is not None:
+                    spawn['size_m'] = size
+                spawns.append(spawn)
                 break
         else:
             raise ValueError("placement_exhausted")
@@ -330,7 +340,7 @@ def return_to_wait(probe, scene):
         raise RuntimeError("wait_pose_not_reached")
 
 
-def sort_scene(scene, shape, output, gui=False, supported_top_m=None, classifier=None, min_class_score=0.8):
+def sort_scene(scene, shape, output, gui=False, supported_top_m=None, classifier=None, min_class_score=0.8, size_range_m=None):
     if classifier is None and (shape not in ("cuboid", "cylinder") or any(o["shape"] != shape for o in scene["objects"])):
         raise ValueError("수동 모드에서는 지정한 한 종류만 운반합니다")
     if classifier is not None:
@@ -350,7 +360,7 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None, classifier
                 observation = capture(scene["camera"])
                 # CNN 모드는 깊이 우선순위의 첫 유효 후보까지만 분류한다.
                 candidates = estimate_many(observation, scene["empty"], scene["camera"], shape, supported_top_m,
-                                           classifier, min_class_score, first_valid_only=classifier is not None)
+                                           classifier, min_class_score, first_valid_only=classifier is not None, size_range_m=size_range_m)
                 scan_dir = output / f"scan_{iteration:02d}"
                 scan_dir.mkdir(parents=True, exist_ok=True)
                 save_observation(scan_dir, observation, scene["empty"], {"valid": False}, scene["camera"])
@@ -541,7 +551,23 @@ def main():
     parser.add_argument("--classification-source", choices=("manual", "cnn"), default="manual", help="종류 입력 또는 CNN 자동 분류")
     parser.add_argument("--model-dir", type=Path, default=Path("checkpoints/shape_cnn_v1"))
     parser.add_argument("--min-class-score", type=float, default=0.8, help="이보다 낮은 분류 점수의 영역은 보류")
+    parser.add_argument('--size-mode', choices=('fixed','random'), default='fixed', help='기본크기 또는 개별 랜덤 크기')
+    parser.add_argument('--min-width-cm', type=float, default=3)
+    parser.add_argument('--max-width-cm', type=float, default=6.4)
+    parser.add_argument('--min-height-cm', type=float, default=3)
+    parser.add_argument('--max-height-cm', type=float, default=7)
     args = parser.parse_args()
+    size_range_m = None
+    if args.size_mode == 'random':
+        try:
+            # 터미널의 cm를 카메라·물리 계산에 쓰는 m로 바꾼다.
+            size_range_m = validate_size_range(tuple(n/100 for n in
+                (args.min_width_cm,args.max_width_cm,args.min_height_cm,args.max_height_cm)))
+        except ValueError as error:
+            parser.error(str(error))
+        if args.task == 'sort' and args.classification_source != 'cnn':
+            parser.error('랜덤 크기 운반에는 --classification-source cnn이 필요합니다')
+
     try:
         validate_counts(args.cuboids, args.cylinders)
     except ValueError as error:
@@ -579,6 +605,8 @@ def main():
         "mass_kg": 0.05, "lateral_friction": CONFIG["lateral_friction"], "mode": args.mode, "task": args.task,
         "release_open_force_n": 0.1, "perception_size_tolerance_ratio": 0.15,
         "classification_source": args.classification_source, "min_class_score": args.min_class_score,
+        "size_mode": args.size_mode, "size_range_m": size_range_m,
+        "surface_policy": "range_footprint_occlusion" if size_range_m is not None else "known_top_15_percent",
         "candidate_policy": "depth_priority_first_valid" if classifier is not None else "all_then_largest_top",
         "model_dir": str(args.model_dir) if classifier is not None else None,
         "model_sha256": classifier.model_sha256 if classifier is not None else None,
@@ -597,7 +625,7 @@ def main():
         for attempt in range(LAYOUT["max_scene_attempts"]):
             seed = args.seed + attempt
             try:
-                scene = build_scene(sample_spawns(args.cuboids, args.cylinders, seed, LAYOUT["region"]), LAYOUT)
+                scene = build_scene(sample_spawns(args.cuboids, args.cylinders, seed, LAYOUT["region"], size_range_m), LAYOUT)
                 result = settle_scene(scene)
             except ValueError as error:
                 result = {"settled": False, "failure_reason": str(error)}
@@ -619,7 +647,7 @@ def main():
                     p.resetDebugVisualizerCamera(1.9, 70, -35, [0.15, 0, 0.55])
                     add_camera_visual(scene["camera"])
                 summary["sort"] = sort_scene(scene, None if classifier is not None else ("cuboid" if args.cuboids else "cylinder"),
-                                             output / "sort", args.mode == "gui", classifier=classifier, min_class_score=args.min_class_score)
+                                             output / "sort", args.mode == "gui", classifier=classifier, min_class_score=args.min_class_score, size_range_m=size_range_m)
         (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
         print("결과 파일: " + str(output / "summary.json"), flush=True)
         print("낙하·정착 확인: " + verdict(result["settled"]), flush=True)

@@ -175,7 +175,53 @@ def estimate(observation, empty, camera, object_shape="cuboid"):
     }
 
 
-def estimate_many(observation, empty, camera, object_shape, supported_top_m=None, classifier=None, min_class_score=0.8, first_valid_only=False):
+def validate_size_range(size_range_m):
+    values = np.asarray(size_range_m, dtype=float)
+    if (values.shape != (4,) or not np.isfinite(values).all()
+            or not 0.03 <= values[0] <= values[1] <= 0.064
+            or not 0.03 <= values[2] <= values[3] <= 0.07):
+        raise ValueError("폭은3~6.4cm, 높이는3~7cm 범위에서 최솟값이 최댓값 이하여야 합니다")
+    return tuple(float(n) for n in values)
+
+
+def variable_surface_check(points, region, foreground, geometry, spans, camera, size_range_m):
+    minimum, maximum, min_height, max_height = size_range_m
+    # 영상 경계 오차1.5mm만 허용한다. 생성된 개별 치수는 읽지 않는다.
+    tolerance = 0.0015
+    if (np.any(spans < minimum - tolerance) or np.any(spans > maximum + tolerance)
+            or not min_height - tolerance <= geometry['height_m'] <= max_height + tolerance):
+        return 'unsupported_geometry'
+    center = np.asarray(geometry['center_xy_m'])
+    surface_xy = points[region][:, :2] - center
+    yaw = geometry['yaw_rad']
+    axes = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
+    if geometry['object_shape'] == 'cuboid':
+        outside = np.any(np.abs(surface_xy @ axes) > spans / 2 + 0.003, axis=1)
+    else:
+        outside = np.linalg.norm(surface_xy, axis=1) > geometry['width_m'] / 2 + 0.003
+    # 하나의 수직 물체라면 옆면도 윗면 테두리 안에 있다. 붙은 다른 물체는 보류한다.
+    if np.any(outside):
+        return 'incomplete_or_merged_surface'
+    top_z = geometry['top_z_m']
+    higher = points[foreground & (points[..., 2] > top_z + 0.003)]
+    if len(higher):
+        eye = np.asarray(camera['eye'])
+        rays = higher - eye
+        # 높은 물체를 지나는 카메라 광선을 후보 윗면 높이까지 연장한다.
+        # 그 위치가 후보의 가능한 최대 범위와 겹치면 가림 가능성이 있어 뒤로 미룬다.
+        scale = (top_z - eye[2]) / rays[:, 2]
+        plane_xy = (eye + scale[:, None] * rays)[:, :2]
+        possible_radius = np.sqrt(2) * maximum + 0.003
+        if np.any(np.linalg.norm(plane_xy - center, axis=1) < possible_radius):
+            return 'possible_top_occlusion'
+    return ''
+
+
+def estimate_many(observation, empty, camera, object_shape, supported_top_m=None, classifier=None, min_class_score=0.8, first_valid_only=False, size_range_m=None):
+    if size_range_m is not None:
+        size_range_m = validate_size_range(size_range_m)
+        if supported_top_m is not None:
+            raise ValueError("고정한 윗면 크기와 랜덤 크기 범위는 함께 지정하지 않습니다")
     if not 0.5 <= min_class_score <= 1:
         raise ValueError("분류 점수 기준은0.5~1이어야 합니다")
     if classifier is not None:
@@ -238,12 +284,16 @@ def estimate_many(observation, empty, camera, object_shape, supported_top_m=None
             yaw = geometry["yaw_rad"]
             axes = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
             spans = np.ptp(top[:, :2] @ axes, axis=0)
-            # 이번 장면의 지원 크기와 비교한다. 잘린 윗면·붙은 영역의 일부를 보류할 수 있다.
-            # 개별 생성 정답은 읽지 않는다. 임의 크기와 모든 가림을 판별하는 검사는 아니다.
-            expected = np.sort(np.asarray(supported_top_m if supported_top_m is not None else
-                                          ([0.06, 0.04] if shape == "cuboid" else [0.05, 0.05])))
-            if np.any(np.abs(np.sort(spans) - expected) > expected * 0.15):
-                geometry = {"valid": False, "failure_reason": "incomplete_or_merged_surface"}
+            # 기본 크기는 기존15% 비교를 유지하고, 랜덤 크기는 별도 영상 검사를 한다.
+            if size_range_m is not None:
+                reason = variable_surface_check(points, region, mask, geometry, spans, camera, size_range_m)
+                if reason:
+                    geometry = {"valid": False, "failure_reason": reason}
+            else:
+                expected = np.sort(np.asarray(supported_top_m if supported_top_m is not None else
+                                              ([0.06, 0.04] if shape == "cuboid" else [0.05, 0.05])))
+                if np.any(np.abs(np.sort(spans) - expected) > expected * 0.15):
+                    geometry = {"valid": False, "failure_reason": "incomplete_or_merged_surface"}
         results.append({**geometry, **prediction, **details})
         # 점수가 낮거나 기하 검사가 실패하면 다음 후보를 계속 확인한다.
         selected = selected or geometry["valid"]

@@ -41,6 +41,7 @@ FAILURES = {
     'supported_by_pedestal': '물체가 손가락 대신 받침대에 지지됨', 'place_not_verified': '원래 위치에 내려놓기를 확인하지 못함',
     'placement_exhausted': '간격을 확보한 물체 배치를 만들지 못함', 'ambiguous_annotation': '영역의 정답 종류를 명확히 구분하지 못함',
     'cropped_at_roi_edge': '물체가 촬영 구역 경계에서 잘림', 'hidden_or_merged_object': '물체가 가려졌거나 영역이 붙음',
+    'possible_top_occlusion': '더 높은 물체가 윗면을 가릴 수 있어 보류함',
     'non_circular_top': '윗면이 원형 조건을 만족하지 않음', 'unsupported_shape': '지원하지 않는 도형 종류',
     'tilted_object': '물체가 기울어져 있음', 'object_outside_region': '물체가 생성 구역 밖으로 나감',
     'insufficient_gap': '물체 사이 간격이 부족함', 'settle_timeout': '정해진 시간 안에 물체가 안정화되지 않음',
