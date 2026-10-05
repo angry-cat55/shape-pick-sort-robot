@@ -26,32 +26,32 @@ class FirstRunTests(unittest.TestCase):
         )
 
     def result(self, process):
-        # 여러 출력 중 RESULT_JSON 줄에서 판정 결과만 꺼낸다.
+        # 여러 출력 중 실행 결과 줄에서 판정 결과만 꺼낸다.
         lines = process.stdout.splitlines()
-        payload = next(line for line in lines if line.startswith("RESULT_JSON="))
-        return json.loads(payload.removeprefix("RESULT_JSON="))
+        payload = next(line for line in lines if line.startswith("실행 결과="))
+        return json.loads(payload.removeprefix("실행 결과="))
 
     def test_gravity_and_ground_contact_after_two_simulation_seconds(self):
         process = self.run_scene("--mode", "direct", "--steps", "480")
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         result = self.result(process)
-        self.assertEqual(result["steps_completed"], 480)
-        self.assertAlmostEqual(result["sim_duration_s"], 2.0)
-        self.assertAlmostEqual(result["initial_z_m"], 0.2)
-        self.assertLess(result["final_z_m"], result["initial_z_m"] - 0.1)
-        self.assertAlmostEqual(result["final_z_m"], 0.02, delta=0.005)
-        self.assertGreater(result["ground_contact_count"], 0)
-        self.assertTrue(result["settled_on_ground"])
+        self.assertEqual(result["완료한 물리 계산 수"], 480)
+        self.assertAlmostEqual(result["시뮬레이션 시간(초)"], 2.0)
+        self.assertAlmostEqual(result["물체 초기 높이(m)"], 0.2)
+        self.assertLess(result["물체 최종 높이(m)"], result["물체 초기 높이(m)"] - 0.1)
+        self.assertAlmostEqual(result["물체 최종 높이(m)"], 0.02, delta=0.005)
+        self.assertGreater(result["바닥 접촉 수"], 0)
+        self.assertEqual(result["바닥 정착 여부"], "성공")
 
     def test_short_run_does_not_report_settled(self):
         process = self.run_scene("--steps", "1")
         self.assertEqual(process.returncode, 1, process.stdout + process.stderr)
-        self.assertFalse(self.result(process)["settled_on_ground"])
+        self.assertEqual(self.result(process)["바닥 정착 여부"], "실패")
 
     def test_nonpositive_steps_are_rejected(self):
         process = self.run_scene("--steps", "0")
         self.assertEqual(process.returncode, 2)
-        self.assertIn("positive", process.stderr)
+        self.assertIn("양의 정수", process.stderr)
 
     def test_gui_without_display_reports_how_to_run_direct(self):
         env = dict(os.environ)

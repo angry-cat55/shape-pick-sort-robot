@@ -1,5 +1,5 @@
 """현재 장면의 RGB crop을 장면별 분할로 수집한다. 정답 ID는 라벨 확인에만 사용한다."""
-import argparse
+from terminal_ko import KoreanArgumentParser, failure_name
 from collections import Counter
 from datetime import datetime
 import hashlib
@@ -27,7 +27,7 @@ def sample_scene(seed, minimum=0.03, maximum=0.064, min_height=0.03, max_height=
     if (any(not math.isfinite(n) for n in (minimum, maximum, min_height, max_height))
             or not 0 < minimum <= maximum <= 0.065
             or not 0.03 <= min_height <= max_height <= 0.07):
-        raise ValueError("幅は0超〜6.5cm、高さは3〜7cmの順序ある範囲にしてください")
+        raise ValueError("폭은0cm 초과~6.5cm, 높이는3~7cm 범위에서 최솟값이 최댓값 이하가 되도록 지정하세요")
     rng = random.Random(seed)
     count = rng.randint(1, 5)
     shapes = ([rng.choice(CLASSES)] if count == 1 else CLASSES + [rng.choice(CLASSES) for _ in range(count - 2)])
@@ -124,7 +124,8 @@ def collect(output, scenes=2000, seed=2026, minimum=0.03, maximum=0.064,
     client = p.connect(p.DIRECT)
     try:
         with (output / "manifest.jsonl").open("w") as manifest, (output / "rejected_scenes.jsonl").open("w") as rejected:
-            for index, split in enumerate(tqdm(splits, desc="장면 수집", disable=not show_progress)):
+            for index, split in enumerate(tqdm(splits, desc="장면 수집", disable=not show_progress,
+                                               bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}장면 [경과 {elapsed}, 남음 {remaining}]")):
                 for attempt in range(30):
                     scene_seed = seed + index * 1000 + attempt
                     try:
@@ -141,7 +142,7 @@ def collect(output, scenes=2000, seed=2026, minimum=0.03, maximum=0.064,
                     except ValueError as error:
                         rejected.write(json.dumps({"scene_id": index, "seed": scene_seed, "reason": str(error)}) + "\n")
                 else:
-                    raise RuntimeError(f"scene {index}: 30번 시도해도 수집할 수 없습니다")
+                    raise RuntimeError(f"장면 {index}: 30번 시도해도 수집할 수 없습니다")
                 config["camera"] = scene["camera"]
                 # 전체 RGB 몇 장도 남겨 실제 구도와 crop을 사람이 확인할 수 있게 한다.
                 if index < 12:
@@ -170,7 +171,7 @@ def collect(output, scenes=2000, seed=2026, minimum=0.03, maximum=0.064,
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = KoreanArgumentParser(description=__doc__)
     parser.add_argument("--scenes", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--min-width-cm", type=float, default=3)
@@ -180,9 +181,16 @@ def main():
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     output = args.output_dir or Path("data") / f"shape_cnn_{datetime.now():%Y%m%dT%H%M%S_%f}"
-    result = collect(output, args.scenes, args.seed, args.min_width_cm / 100, args.max_width_cm / 100,
-                     args.min_height_cm / 100, args.max_height_cm / 100)
-    print(json.dumps({"output": str(output), "zip": str(output.with_suffix('.zip')), "images": result["image_counts"]}, indent=2))
+    try:
+        result = collect(output, args.scenes, args.seed, args.min_width_cm / 100, args.max_width_cm / 100,
+                         args.min_height_cm / 100, args.max_height_cm / 100)
+    except (ValueError, RuntimeError, FileExistsError) as error:
+        parser.error(failure_name(str(error)))
+    print(f"데이터 폴더: {output}\n압축 파일: {output.with_suffix('.zip')}")
+    for split, label in [('train', '학습'), ('val', '검증'), ('test', '테스트')]:
+        counts = result['image_counts']
+        print(f"{label} 사진 수: 직육면체 {counts[f'{split}/cuboid']}장, 원기둥 {counts[f'{split}/cylinder']}장")
+
 
 if __name__ == "__main__":
     main()

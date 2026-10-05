@@ -56,7 +56,7 @@ python3 -m venv .venv
 
 `--cuboids`는 직육면체 개수, `--cylinders`는 원기둥 개수, `--seed`는 랜덤 배치를 재현하는 번호입니다. `--mode direct`는 화면 없이 검증합니다. 기본 실행은 장면 확인이며 로봇이 운반하지 않습니다.
 
-**같은 종류를 하나씩 운반하려면** `--task sort`를 추가합니다. GUI는 작업이 끝나면 종료됩니다.
+**같은 종류를 하나씩 운반하려면** `--task sort`를 추가합니다. GUI는 작업이 끝나면 종료됩니다. 터미널의 동작 단계·결과·입력 오류는 한글로 표시하며, 저장 JSON의 상태 식별자는 기존 영문을 유지합니다.
 
 ```bash
 .venv/bin/python scripts/multi_object_scene.py --mode gui --task sort --cuboids 5 --cylinders 0 --seed 0
@@ -80,6 +80,7 @@ shape-pick-sort-robot/
 │   ├── contact_grasp_probe.py  한 물체의 접촉 집기·이동·성공/실패 검증
 │   ├── rgbd_camera.py          RGB-D 촬영·영역 분리·좌표/방향/폭 계산
 │   ├── multi_object_scene.py   최대5개 배치·카메라 표시·하나씩 운반·재촬영
+│   ├── terminal_ko.py          터미널 단계·실패 원인·도움말의 공통 한글 표시
 │   └── collect_cnn_data.py     크기·회전 랜덤 RGB 수집·장면별 데이터 분할
 ├── tests/                     코드를 실행해서 동작을 확인하는 자동 테스트
 │   ├── test_pybullet_first_run.py    첫 장면·입력·종료 확인

@@ -1,6 +1,6 @@
 """로봇 앞 최대 5개 낙하 배치와 한 종류 도형의 카메라 순차 운반을 확인한다."""
 
-import argparse
+from terminal_ko import KoreanArgumentParser, failure_name, verdict
 from datetime import datetime
 import hashlib
 import importlib.metadata
@@ -175,7 +175,7 @@ def build_scene(spawns, layout):
         size = spawn.get("size_m", CONFIG["block_size_m"] if spawn["shape"] == "cuboid" else [0.05, 0.06])
         if (len(size) != (3 if spawn["shape"] == "cuboid" else 2)
                 or any(not math.isfinite(n) or n <= 0 for n in size)):
-            raise ValueError("size_m must contain positive finite dimensions")
+            raise ValueError("물체 치수는 양수이며 유한한 값이어야 합니다")
         z = CONFIG["table_top_m"] + size[-1] / 2 + layout["drop_clearance_m"]
         if spawn["shape"] == "cuboid":
             body = box([n / 2 for n in size], [*spawn["xy"], z], 0.05, [0.9, 0.15, 0.1, 1])
@@ -513,7 +513,7 @@ def settle_scene(scene, timeout_s=5.0):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = KoreanArgumentParser(description=__doc__)
     parser.add_argument("--cuboids", type=int, default=3)
     parser.add_argument("--cylinders", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
@@ -529,9 +529,9 @@ def main():
     if args.task == "sort" and args.cuboids and args.cylinders:
         parser.error("CNN 연결 전에는 --cuboids N --cylinders 0 또는 반대로 지정하세요")
     if not math.isfinite(args.duration) or args.duration <= 0:
-        parser.error("duration must be positive and finite")
+        parser.error("표시 시간은 양수이며 유한한 값이어야 합니다")
     if args.mode == "gui" and not os.getenv("DISPLAY"):
-        parser.error("GUI needs DISPLAY; use --mode direct")
+        parser.error("창을 표시할 수 없습니다. 데스크톱 터미널에서 실행하거나 --mode direct를 사용하세요")
     output = args.output_dir or Path("outputs/multi-object-scene") / datetime.now().strftime("%Y%m%dT%H%M%S_%f")
     output.mkdir(parents=True, exist_ok=True)
     (output / "config.json").write_text(json.dumps({
@@ -574,14 +574,16 @@ def main():
                     add_camera_visual(scene["camera"])
                 summary["sort"] = sort_scene(scene, "cuboid" if args.cuboids else "cylinder", output / "sort", args.mode == "gui")
         (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
-        print("SUMMARY_PATH=" + str(output / "summary.json"), flush=True)
-        print("낙하·정착 확인: " + ("PASS" if result["settled"] else "FAIL"), flush=True)
+        print("결과 파일: " + str(output / "summary.json"), flush=True)
+        print("낙하·정착 확인: " + verdict(result["settled"]), flush=True)
+        if not result["settled"]:
+            print("배치 실패 원인: " + failure_name(result["failure_reason"]), flush=True)
         if result["settled"]:
             print(f"초기 관측 영역: {summary['observation']['observed_regions']}개", flush=True)
             if args.task == "scene":
-                print("뒤쪽 자리 정적 IK: " + ("PASS" if summary["reachability"]["all_valid"] else "FAIL"), flush=True)
+                print("뒤쪽 자리 역기구학 확인: " + verdict(summary["reachability"]["all_valid"]), flush=True)
             else:
-                print("순차 운반: " + ("PASS" if summary["sort"]["success"] else "FAIL: " + summary["sort"]["failure_reason"]), flush=True)
+                print("순차 운반: " + ("성공" if summary["sort"]["success"] else "실패: " + failure_name(summary["sort"]["failure_reason"])), flush=True)
         if args.mode == "gui" and result["settled"] and args.task == "scene":
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
             p.resetDebugVisualizerCamera(1.9, 70, -35, [0.15, 0, 0.55])
