@@ -1,4 +1,4 @@
-"""로봇 앞 최대 5개 낙하 배치와 한 종류 도형의 카메라 순차 운반을 확인한다."""
+"""로봇 앞 최대 5개 낙하 배치와 도형의 카메라 관찰·CNN 분류·순차 운반을 확인한다."""
 
 from terminal_ko import KoreanArgumentParser, failure_name, verdict
 from datetime import datetime
@@ -330,11 +330,14 @@ def return_to_wait(probe, scene):
         raise RuntimeError("wait_pose_not_reached")
 
 
-def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
-    if shape not in ("cuboid", "cylinder") or any(o["shape"] != shape for o in scene["objects"]):
-        raise ValueError("CNN 연결 전에는 수동 지정한 한 종류만 운반합니다")
+def sort_scene(scene, shape, output, gui=False, supported_top_m=None, classifier=None, min_class_score=0.8):
+    if classifier is None and (shape not in ("cuboid", "cylinder") or any(o["shape"] != shape for o in scene["objects"])):
+        raise ValueError("수동 모드에서는 지정한 한 종류만 운반합니다")
+    if classifier is not None:
+        classifier.validate_camera(scene["camera"])
     output.mkdir(parents=True, exist_ok=True)
-    report = {"success": False, "classification_source": "manual_single_shape", "scans": [], "picks": [], "failure_reason": ""}
+    placed_counts = {"cuboid": 0, "cylinder": 0}
+    report = {"success": False, "classification_source": "cnn" if classifier is not None else "manual_single_shape", "scans": [], "picks": [], "failure_reason": ""}
     with (output / "motion.jsonl").open("w") as log:
         probe = scene_probe(scene, log, gui)
         # ID는 평가 대상의 대응에만 쓴다. 이동 좌표는 매번 카메라에서 구한다.
@@ -345,11 +348,14 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
         try:
             for iteration in range(6):
                 observation = capture(scene["camera"])
-                candidates = estimate_many(observation, scene["empty"], scene["camera"], shape, supported_top_m)
+                # CNN 모드는 깊이 우선순위의 첫 유효 후보까지만 분류한다.
+                candidates = estimate_many(observation, scene["empty"], scene["camera"], shape, supported_top_m,
+                                           classifier, min_class_score, first_valid_only=classifier is not None)
                 scan_dir = output / f"scan_{iteration:02d}"
                 scan_dir.mkdir(parents=True, exist_ok=True)
                 save_observation(scan_dir, observation, scene["empty"], {"valid": False}, scene["camera"])
                 scan = {"valid_targets": sum(g["valid"] for g in candidates),
+                        "cnn_evaluations": sum(g.get("cnn_evaluated", False) for g in candidates),
                         "regions": [{k: v for k, v in g.items() if k != "mask"} for g in candidates]}
                 report["scans"].append(scan)
                 (scan_dir / "regions.json").write_text(json.dumps(scan, indent=2) + "\n")
@@ -362,10 +368,14 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
                     report["success"] = not remaining
                     report["failure_reason"] = "" if not remaining else "no_valid_target"
                     break
-                # 영상에서 윗면의 점이 많이 보이는 물체를 먼저 선택한다.
+                # CNN 모드는 첫 유효 후보를 사용한다. 수동 모드는 전체 검사 후 윗면이 큰 후보를 고른다.
                 geometry = max(valid, key=lambda g: g["top_pixels"])
+                # 상자 선택도 생성 정답이 아닌 카메라 영역의 CNN 예측으로 결정한다.
+                target_shape = geometry["object_shape"]
                 plan = grasp_plan(geometry)
-                pick = {"grasp_plan": plan, "lift_success": False, "arrival_success": False}
+                pick = {"grasp_plan": plan, "lift_success": False, "arrival_success": False,
+                        "predicted_class": target_shape, "class_score": geometry.get("class_score"),
+                        "class_probabilities": geometry.get("class_probabilities"), "target_bin": target_shape}
                 report["picks"].append(pick)
                 matches = sorted((math.dist(geometry["center_xy_m"], p.getBasePositionAndOrientation(body)[0][:2]), body)
                                  for body in remaining)
@@ -374,6 +384,9 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
                 probe.block = matches[0][1]
                 pick["evaluation_body_id"] = probe.block
                 pick["evaluation_xy_error_m"] = matches[0][0]
+                # 정답 종류는 점수 기록·최종 도착 평가에만 쓴다. 계획과 목적지를 바꾸지 않는다.
+                true_shape = next(o["shape"] for o in scene["objects"] if o["body"] == probe.block)
+                pick.update(true_class=true_shape, classification_correct=target_shape == true_shape)
                 probe.supports = [scene["table"]] + [part for b in scene["bins"].values() for part in b["parts"]] + [o["body"] for o in scene["objects"] if o["body"] != probe.block]
                 probe.drop_via_relative_motion = False
                 x, y, z = plan["position_m"]
@@ -389,7 +402,7 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
                     raise RuntimeError("lift_not_verified")
                 probe.move("CLEARANCE", [x, y, 0.65], 1.0)
                 # 몸통을 가로지르지 않도록 높은 위치에서 바깥쪽으로 돌아 뒤 상자로 간다.
-                destination = scene["bins"][shape]["slots"][len(report["picks"]) - 1]
+                destination = scene["bins"][target_shape]["slots"][placed_counts[target_shape]]
                 direction = 1 if destination[1] > 0 else -1
                 probe.carry_arc(direction)
                 # 상자에서는 긴 변과 손끝 방향을 나란하게 맞춰 벽과 개방 공간을 확보한다.
@@ -397,7 +410,7 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
                 probe.move("BIN_ABOVE", [*destination, 0.50], 1.0)
                 # 바닥 가까이 내려놓는다. 실제 정착은 접촉과 속도로 따로 확인한다.
                 release_z = max(z + CONFIG["bin_floor_thickness_m"],
-                                scene["bins"][shape]["floor_top"] + CONFIG["bin_release_tcp_floor_clearance_m"])
+                                scene["bins"][target_shape]["floor_top"] + CONFIG["bin_release_tcp_floor_clearance_m"])
                 pick["release_tcp_z_m"] = release_z
                 probe.move("BIN_PLACE", [*destination, release_z], 1.2)
                 if probe.drop_via_relative_motion:
@@ -420,9 +433,13 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
                 # 지정한 상자 도착, 다른 상자 도착, 정착 실패를 구분한다.
                 pick["bin_arrivals"] = {name: n >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
                                         for name, n in consecutive.items()}
-                pick["arrival_success"] = pick["bin_arrivals"][shape]
+                pick["arrival_success"] = pick["bin_arrivals"][target_shape]
+                pick["correct_bin_arrival"] = pick["bin_arrivals"][true_shape]
                 if not pick["arrival_success"]:
                     raise RuntimeError("wrong_bin_arrival" if any(pick["bin_arrivals"].values()) else "arrival_not_verified")
+                if not pick["correct_bin_arrival"]:
+                    raise RuntimeError("classification_wrong_bin")
+                placed_counts[target_shape] += 1
                 remaining.remove(probe.block)
                 return_to_wait(probe, scene)
         except RuntimeError as error:
@@ -434,7 +451,7 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
                 probe.step()
                 for o in scene["objects"]:
                     probe.block = o["body"]
-                    final[str(o["body"])] &= probe.measure()["bin_arrivals"][shape]
+                    final[str(o["body"])] &= probe.measure()["bin_arrivals"][o["shape"]]
             report["final_arrivals"] = final
             if not all(final.values()):
                 report.update(success=False, failure_reason="final_arrival_not_verified")
@@ -520,18 +537,40 @@ def main():
     parser.add_argument("--mode", choices=("direct", "gui"), default="direct")
     parser.add_argument("--duration", type=float, default=20, help="GUI 표시 시간(초)")
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--task", choices=("scene", "sort"), default="scene", help="장면 확인 또는 한 종류 순차 운반")
+    parser.add_argument("--task", choices=("scene", "sort"), default="scene", help="장면 확인 또는 순차 운반")
+    parser.add_argument("--classification-source", choices=("manual", "cnn"), default="manual", help="종류 입력 또는 CNN 자동 분류")
+    parser.add_argument("--model-dir", type=Path, default=Path("checkpoints/shape_cnn_v1"))
+    parser.add_argument("--min-class-score", type=float, default=0.8, help="이보다 낮은 분류 점수의 영역은 보류")
     args = parser.parse_args()
     try:
         validate_counts(args.cuboids, args.cylinders)
     except ValueError as error:
         parser.error(str(error))
-    if args.task == "sort" and args.cuboids and args.cylinders:
-        parser.error("CNN 연결 전에는 --cuboids N --cylinders 0 또는 반대로 지정하세요")
+    if args.task == "sort" and args.classification_source == "manual" and args.cuboids and args.cylinders:
+        parser.error("수동 모드에서는 --cuboids N --cylinders 0 또는 반대로 지정하세요")
     if not math.isfinite(args.duration) or args.duration <= 0:
         parser.error("표시 시간은 양수이며 유한한 값이어야 합니다")
     if args.mode == "gui" and not os.getenv("DISPLAY"):
         parser.error("창을 표시할 수 없습니다. 데스크톱 터미널에서 실행하거나 --mode direct를 사용하세요")
+    if not math.isfinite(args.min_class_score) or not 0.5 <= args.min_class_score <= 1:
+        parser.error("최소 분류 점수는0.5~1 사이여야 합니다")
+    classifier = None
+    if args.classification_source == "cnn":
+        if args.task != "sort":
+            parser.error("CNN 분류는 --task sort와 함께 사용하세요")
+        # 기존 수동 실험은 PyTorch 없이도 실행된다. CNN을 선택했을 때만 가져온다.
+        try:
+            from cnn_inference import CnnClassifier
+            classifier = CnnClassifier(args.model_dir)
+            classifier.validate_camera(scene_camera(LAYOUT))
+        except (ImportError, OSError, ValueError, RuntimeError, KeyError) as error:
+            # 파일·패키지 누락은 운영체제의 영문 예외 대신 필요한 조치를 표시한다.
+            detail = str(error)
+            if isinstance(error, OSError):
+                detail = f"모델 또는 설정 파일을 읽을 수 없습니다: {error.filename or args.model_dir}"
+            elif isinstance(error, ImportError):
+                detail = f"추론 패키지를 불러올 수 없습니다: {error.name}"
+            parser.error(f"CNN 준비 실패: {detail}; requirements-inference.txt와 --model-dir를 확인하세요")
     output = args.output_dir or Path("outputs/multi-object-scene") / datetime.now().strftime("%Y%m%dT%H%M%S_%f")
     output.mkdir(parents=True, exist_ok=True)
     (output / "config.json").write_text(json.dumps({
@@ -539,11 +578,18 @@ def main():
         "dt_s": CONFIG["dt_s"], "block_size_m": CONFIG["block_size_m"], "cylinder_size_m": [0.05, 0.06],
         "mass_kg": 0.05, "lateral_friction": CONFIG["lateral_friction"], "mode": args.mode, "task": args.task,
         "release_open_force_n": 0.1, "perception_size_tolerance_ratio": 0.15,
+        "classification_source": args.classification_source, "min_class_score": args.min_class_score,
+        "candidate_policy": "depth_priority_first_valid" if classifier is not None else "all_then_largest_top",
+        "model_dir": str(args.model_dir) if classifier is not None else None,
+        "model_sha256": classifier.model_sha256 if classifier is not None else None,
+        "model_params_sha256": classifier.params_sha256 if classifier is not None else None,
+        "torch_version": importlib.metadata.version("torch") if classifier is not None else None,
         "camera": scene_camera(LAYOUT), "pybullet_version": importlib.metadata.version("pybullet"),
         "numpy_version": importlib.metadata.version("numpy"), "pillow_version": importlib.metadata.version("Pillow"),
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "dependency_sha256": {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                              for name in ("rgbd_camera.py", "contact_grasp_probe.py")},
+                              for name in (("rgbd_camera.py", "contact_grasp_probe.py", "cnn_inference.py")
+                                           if classifier is not None else ("rgbd_camera.py", "contact_grasp_probe.py"))},
     }, indent=2) + "\n")
     client = p.connect(p.GUI if args.mode == "gui" else p.DIRECT)
     attempts = []
@@ -572,7 +618,8 @@ def main():
                     p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
                     p.resetDebugVisualizerCamera(1.9, 70, -35, [0.15, 0, 0.55])
                     add_camera_visual(scene["camera"])
-                summary["sort"] = sort_scene(scene, "cuboid" if args.cuboids else "cylinder", output / "sort", args.mode == "gui")
+                summary["sort"] = sort_scene(scene, None if classifier is not None else ("cuboid" if args.cuboids else "cylinder"),
+                                             output / "sort", args.mode == "gui", classifier=classifier, min_class_score=args.min_class_score)
         (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
         print("결과 파일: " + str(output / "summary.json"), flush=True)
         print("낙하·정착 확인: " + verdict(result["settled"]), flush=True)

@@ -175,13 +175,20 @@ def estimate(observation, empty, camera, object_shape="cuboid"):
     }
 
 
-def estimate_many(observation, empty, camera, object_shape, supported_top_m=None):
-    # 실행 전에 정한 지원 윗면 크기다. 시뮬레이터의 개별 물체 크기는 조회하지 않는다.
-    expected = np.asarray(supported_top_m if supported_top_m is not None else
-                          ([0.06, 0.04] if object_shape == "cuboid" else [0.05, 0.05]), dtype=float)
-    if expected.shape != (2,) or not np.isfinite(expected).all() or np.any(expected <= 0):
-        raise ValueError("지원 윗면 크기는 양수·유한수 두 개여야 합니다")
-    expected = np.sort(expected)
+def estimate_many(observation, empty, camera, object_shape, supported_top_m=None, classifier=None, min_class_score=0.8, first_valid_only=False):
+    if not 0.5 <= min_class_score <= 1:
+        raise ValueError("분류 점수 기준은0.5~1이어야 합니다")
+    if classifier is not None:
+        classifier.validate_camera(camera)
+        if supported_top_m is not None:
+            raise ValueError("혼합 CNN 모드에서는 종류별 기본 크기 검사를 사용합니다")
+    elif object_shape not in ("cuboid", "cylinder"):
+        raise ValueError("수동 모드에는 도형 종류가 필요합니다")
+    # 별도 지정 크기는 수동 실험에서만 사용한다. 개별 생성 정답을 읽지 않는다.
+    if supported_top_m is not None:
+        expected = np.asarray(supported_top_m, dtype=float)
+        if expected.shape != (2,) or not np.isfinite(expected).all() or np.any(expected <= 0):
+            raise ValueError("지원 윗면 크기는 양수·유한수 두 개여야 합니다")
     # 생성 목록 없이 깊이 차이로 영역을 분리한다. 좌표 계산은 기존 함수를 재사용한다.
     depth = observation["depth"]
     if (depth.shape != (camera["height"], camera["width"]) or depth.shape != empty["depth"].shape
@@ -192,14 +199,39 @@ def estimate_many(observation, empty, camera, object_shape, supported_top_m=None
     for axis, (low, high) in enumerate(camera["roi_xy_m"]):
         mask &= (points[..., axis] > low) & (points[..., axis] < high)
     mask &= (points[..., 2] > camera["table_top_m"] + 0.008) & (depth < 1)
+    groups = components(mask)
+    ranked = []
+    for group in groups:
+        pixels = np.asarray(group)
+        surface = points[pixels[:, 0], pixels[:, 1]]
+        # 종류를 몰라도 깊이의 높은 점을 골라 윗면 후보 수를 셀 수 있다.
+        top_z = float(np.percentile(surface[:, 2], 95))
+        count = int(np.count_nonzero(np.abs(surface[:, 2] - top_z) <= camera["top_band_m"]))
+        ranked.append((count, group))
+    if first_valid_only:
+        ranked.sort(key=lambda item: item[0], reverse=True)
     results = []
-    for group in components(mask):
+    selected = False
+    for top_count, group in ranked:
         pixels = np.asarray(group)
         region = np.zeros_like(mask)
         region[pixels[:, 0], pixels[:, 1]] = True
+        details = {"mask": region, "priority_top_pixels": top_count, "cnn_evaluated": False}
+        # 유효한 한 대상을 찾았으면 남은 영역은 분류하지 않고 탐지 기록만 남긴다.
+        if first_valid_only and selected:
+            results.append({"valid": False, "failure_reason": "not_evaluated", **details})
+            continue
         isolated = dict(observation)
         isolated["depth"] = np.where(region, depth, empty["depth"])
-        geometry = estimate(isolated, empty, camera, object_shape)
+        # 우선순위대로 필요한 후보만 RGB crop으로 잘라 분류한다.
+
+        prediction = classifier.predict(rgb_crop(observation["rgb"], region)) if classifier is not None else {}
+        details["cnn_evaluated"] = classifier is not None
+        shape = prediction.get("predicted_class", object_shape)
+        if prediction and prediction["class_score"] < min_class_score:
+            results.append({"valid": False, "failure_reason": "low_class_confidence", **prediction, **details})
+            continue
+        geometry = estimate(isolated, empty, camera, shape)
         if geometry["valid"]:
             top = points[region]
             top = top[np.abs(top[:, 2] - geometry["top_z_m"]) <= camera["top_band_m"]]
@@ -208,9 +240,13 @@ def estimate_many(observation, empty, camera, object_shape, supported_top_m=None
             spans = np.ptp(top[:, :2] @ axes, axis=0)
             # 이번 장면의 지원 크기와 비교한다. 잘린 윗면·붙은 영역의 일부를 보류할 수 있다.
             # 개별 생성 정답은 읽지 않는다. 임의 크기와 모든 가림을 판별하는 검사는 아니다.
+            expected = np.sort(np.asarray(supported_top_m if supported_top_m is not None else
+                                          ([0.06, 0.04] if shape == "cuboid" else [0.05, 0.05])))
             if np.any(np.abs(np.sort(spans) - expected) > expected * 0.15):
                 geometry = {"valid": False, "failure_reason": "incomplete_or_merged_surface"}
-        results.append({**geometry, "mask": region})
+        results.append({**geometry, **prediction, **details})
+        # 점수가 낮거나 기하 검사가 실패하면 다음 후보를 계속 확인한다.
+        selected = selected or geometry["valid"]
     return results
 
 
