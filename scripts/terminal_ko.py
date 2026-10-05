@@ -12,6 +12,7 @@ STAGES = {
     'BIN_ABOVE': '상자 위로 이동', 'BIN_PLACE': '상자 바닥 가까이 내려놓기',
     'BIN_RELEASE': '상자에서 손가락 열기', 'BIN_RETREAT': '상자 위로 후퇴',
     'ARRIVAL_SETTLE': '상자에 놓인 물체 안정화 대기', 'VERIFY_ARRIVAL': '물체의 상자 도착 확인',
+    'VERIFY_FINAL_ARRIVAL': '전체 물체의 상자 정착 최종 확인',
     'PLACE': '원래 위치에 내려놓기', 'RELEASE': '손가락 열어 물체 놓기', 'RETREAT': '물체 위로 후퇴',
     'VERIFY_PLACE': '내려놓은 물체 확인', 'RETURN_WAIT': '촬영용 대기 자세로 복귀',
     'WAIT_SETTLE': '대기 자세에서 안정화 대기', 'FORCED_OPEN': '대조 실험: 손가락 열어 낙하 유도',

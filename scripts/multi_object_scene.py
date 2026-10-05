@@ -345,9 +345,14 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None, classifier
         raise ValueError("수동 모드에서는 지정한 한 종류만 운반합니다")
     if classifier is not None:
         classifier.validate_camera(scene["camera"])
+    # 크기가 다른 원기둥의 바닥 접촉이 수치적으로 흔들리지 않도록 접촉 계산을 더 반복한다.
+    # 속도·접촉에 대한 성공 기준은 그대로이며, 기본 크기 모드의 물리 설정은 유지한다.
+    if size_range_m is not None:
+        p.setPhysicsEngineParameter(numSolverIterations=200)
     output.mkdir(parents=True, exist_ok=True)
     placed_counts = {"cuboid": 0, "cylinder": 0}
     report = {"success": False, "classification_source": "cnn" if classifier is not None else "manual_single_shape", "scans": [], "picks": [], "failure_reason": ""}
+    report["solver_iterations"] = p.getPhysicsEngineParameters()["numSolverIterations"]
     with (output / "motion.jsonl").open("w") as log:
         probe = scene_probe(scene, log, gui)
         # ID는 평가 대상의 대응에만 쓴다. 이동 좌표는 매번 카메라에서 구한다.
@@ -456,13 +461,22 @@ def sort_scene(scene, shape, output, gui=False, supported_top_m=None, classifier
             report["failure_reason"] = str(error)
         # 앞서 놓은 물체가 나중 동작에 밀려나지 않았는지 최종 상태도 별도로 검사한다.
         if report["success"]:
-            final = {str(o["body"]): True for o in scene["objects"]}
-            for _ in range(round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])):
+            probe.start_stage('VERIFY_FINAL_ARRIVAL')
+            consecutive = {str(o['body']): 0 for o in scene['objects']}
+            required = round(CONFIG['arrival_hold_s'] / CONFIG['dt_s'])
+            # 마지막 후퇴 직후의 순간 흔들림은 기다린다. 모두가0.5초 연속 정착해야 통과한다.
+            # 개별 도착 검사와 같이 최대5초까지만 기다리고 판정 조건 자체는 완화하지 않는다.
+            for _ in range(round(5.0 / CONFIG['dt_s'])):
                 probe.step()
-                for o in scene["objects"]:
-                    probe.block = o["body"]
-                    final[str(o["body"])] &= probe.measure()["bin_arrivals"][o["shape"]]
-            report["final_arrivals"] = final
+                for o in scene['objects']:
+                    probe.block = o['body']
+                    key = str(o['body'])
+                    stable = probe.measure()['bin_arrivals'][o['shape']]
+                    consecutive[key] = consecutive[key] + 1 if stable else 0
+                if all(n >= required for n in consecutive.values()):
+                    break
+            final = {key: n >= required for key, n in consecutive.items()}
+            report['final_arrivals'] = final
             if not all(final.values()):
                 report.update(success=False, failure_reason="final_arrival_not_verified")
     (output / "sort_result.json").write_text(json.dumps(report, indent=2) + "\n")

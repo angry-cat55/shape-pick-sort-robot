@@ -46,6 +46,24 @@ class RandomSizeTests(unittest.TestCase):
                 self.assertLess(math.dist(results[0]['center_xy_m'],actual_xy),0.002)
         finally:p.disconnect(client)
 
+    def test_five_random_cylinders_verify_all_objects_after_settling(self):
+        from cnn_inference import CnnClassifier
+        from multi_object_scene import sort_scene
+        import tempfile
+        folder = ROOT/'checkpoints/shape_cnn_v1'
+        if not (folder/'best_model.pt').exists():
+            self.skipTest('개인 학습 가중치는 Git에 포함하지 않습니다')
+        client = p.connect(p.DIRECT)
+        try:
+            scene = build_scene(sample_spawns(0,5,1,LAYOUT['region'],size_range_m=RANGE),LAYOUT)
+            self.assertTrue(settle_scene(scene)['settled'])
+            with tempfile.TemporaryDirectory() as output:
+                result = sort_scene(scene,None,Path(output),classifier=CnnClassifier(folder),size_range_m=RANGE)
+                self.assertTrue(result['success'],result['failure_reason'])
+                self.assertEqual(len(result['picks']),5)
+                self.assertTrue(all(result['final_arrivals'].values()))
+        finally:p.disconnect(client)
+
     def test_maximum_cylinder_at_pixel_edge_positions_keeps_gripper_limit(self):
         client = p.connect(p.DIRECT)
         try:
