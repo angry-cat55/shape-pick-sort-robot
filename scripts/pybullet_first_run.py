@@ -1,6 +1,7 @@
 """바닥, Panda, 직육면체로 중력과 충돌을 확인하는 첫 PyBullet 실행."""
 
 import argparse
+from terminal_ko import KoreanArgumentParser, NAMES, verdict
 import json
 import math
 import os
@@ -15,18 +16,18 @@ TIME_STEP_S = 1.0 / 240.0
 def positive_steps(value):
     steps = int(value)
     if steps <= 0:
-        raise argparse.ArgumentTypeError("steps must be a positive integer")
+        raise argparse.ArgumentTypeError("물리 계산 횟수는 양의 정수로 지정하세요")
     return steps
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = KoreanArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("direct", "gui"), default="direct")
     parser.add_argument("--steps", type=positive_steps, default=480)
     args = parser.parse_args()
     # Linux의 PyBullet GUI는 X11을 사용한다. Wayland에서는 XWayland DISPLAY 필요.
     if args.mode == "gui" and sys.platform.startswith("linux") and not os.getenv("DISPLAY"):
-        parser.error("GUI needs DISPLAY; use --mode direct or run in a desktop terminal")
+        parser.error("창을 표시하려면 데스크톱 터미널에서 실행하세요. 화면 없이 실행하려면 --mode direct를 사용하세요")
 
     try:
         import pybullet as p
@@ -85,15 +86,15 @@ def main():
                 cameraDistance=1.4, cameraYaw=45, cameraPitch=-30,
                 cameraTargetPosition=[0.3, 0, 0.3], physicsClientId=client,
             )
-        print(f"mode={args.mode}, requested_steps={args.steps}, dt={TIME_STEP_S:.6f}s", flush=True)
-        print("PANDA_JOINTS_JSON=" + json.dumps(joints), flush=True)
+        print(f"실행 방식: {NAMES[args.mode]}, 물리 계산 횟수: {args.steps}, 계산 간격: {TIME_STEP_S:.6f}초", flush=True)
+        print(f"Panda 관절 수: {len(joints)}개", flush=True)
         print("로봇은 대기 자세를 유지합니다. 빨간 물체의 낙하·바닥 충돌을 확인합니다.", flush=True)
 
         started = time.monotonic()
         # 한 번씩 물리를 계산한다. GUI에서는 눈으로 볼 수 있게 속도를 맞춘다.
         for _ in range(args.steps):
             if not p.isConnected(client):
-                print("창이 닫혀 종료했습니다. 전체 step 검증은 완료되지 않았습니다.", flush=True)
+                print("창이 닫혀 종료했습니다. 전체 물리 계산 검증은 완료되지 않았습니다.", flush=True)
                 return 130
             p.stepSimulation(physicsClientId=client)
             if args.mode == "gui":
@@ -116,8 +117,16 @@ def main():
             "initial_z_m": initial_z, "final_z_m": position[2],
             "ground_contact_count": len(contacts), "settled_on_ground": settled,
         }
-        print("RESULT_JSON=" + json.dumps(result), flush=True)
-        print("바닥 정착 확인: " + ("PASS" if settled else "FAIL"), flush=True)
+        # 수치 판정은 그대로 두고 화면에 보여줄 키만 한글로 바꾼다.
+        labels = {'mode': '실행 방식', 'steps_completed': '완료한 물리 계산 수',
+                  'sim_duration_s': '시뮬레이션 시간(초)', 'wall_duration_s': '실제 소요 시간(초)',
+                  'initial_z_m': '물체 초기 높이(m)', 'final_z_m': '물체 최종 높이(m)',
+                  'ground_contact_count': '바닥 접촉 수', 'settled_on_ground': '바닥 정착 여부'}
+        display = {labels[key]: value for key, value in result.items()}
+        display['실행 방식'] = NAMES[args.mode]
+        display['바닥 정착 여부'] = verdict(settled)
+        print("실행 결과=" + json.dumps(display, ensure_ascii=False), flush=True)
+        print("바닥 정착 확인: " + verdict(settled), flush=True)
         return 0 if settled else 1
     except KeyboardInterrupt:
         print("Ctrl+C로 중단했습니다. 연결을 해제합니다.", flush=True)

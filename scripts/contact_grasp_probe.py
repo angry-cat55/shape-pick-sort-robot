@@ -1,6 +1,6 @@
 """직육면체·수직 원기둥의 접촉 집기와 운반을 검증한다."""
 
-import argparse
+from terminal_ko import KoreanArgumentParser, NAMES, failure_name, stage_name, verdict
 from datetime import datetime, timezone, timedelta
 import hashlib
 import importlib.metadata
@@ -322,7 +322,7 @@ class Probe:
 
     def start_stage(self, stage):
         self.stage = stage
-        print(f"  {stage}", flush=True)
+        print(f"  {stage_name(stage)}", flush=True)
 
     def wait(self, stage, seconds):
         self.start_stage(stage)
@@ -507,7 +507,7 @@ class Probe:
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = KoreanArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["direct", "gui"], default="direct")
     parser.add_argument("--scenario", choices=[
         "normal", "miss", "open", "support", "all", "transport", "transport_drop", "wrong_bin", "all_transport", "camera_empty",
@@ -524,23 +524,23 @@ def main():
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if args.trials < 1:
-        parser.error("trials must be positive")
+        parser.error("반복 횟수는 양의 정수여야 합니다")
     # 원기둥은 영상 기반 실험으로만 실행한다. 고정 직육면체 oracle 기준과 섞지 않는다.
     if args.object_shape == "cylinder" and args.pose_source != "camera":
-        parser.error("cylinder requires --pose-source camera")
+        parser.error("원기둥 실험에는 --pose-source camera가 필요합니다")
     if args.object_shape == "cuboid" and (args.cylinder_diameter, args.cylinder_height) != (0.05, 0.06):
-        parser.error("cylinder dimensions require --object-shape cylinder")
+        parser.error("원기둥 치수 지정에는 --object-shape cylinder가 필요합니다")
     if not all(math.isfinite(value) and value > 0 for value in (args.cylinder_diameter, args.cylinder_height)):
-        parser.error("cylinder dimensions must be positive and finite")
+        parser.error("원기둥 지름·높이는 양수이며 유한한 값이어야 합니다")
     if args.pose_source == "camera" and args.scenario in ("support", "all"):
-        parser.error("support/all are oracle probes; camera supports all_transport or individual grasp scenarios")
+        parser.error("받침대·전체 집기 대조는 정답 좌표 실험입니다. 카메라 모드에서는 전체 운반 대조 또는 개별 집기 실험을 선택하세요")
     if args.pose_source == "oracle" and (args.scenario == "camera_empty" or
             (args.block_x, args.block_y, args.block_yaw) != (0.5, 0, 0)):
-        parser.error("camera_empty and varied block pose require --pose-source camera")
+        parser.error("빈 장면 검사·물체 위치 변경에는 --pose-source camera가 필요합니다")
     if not all(math.isfinite(value) for value in (args.block_x, args.block_y, args.block_yaw)):
-        parser.error("block pose must be finite")
+        parser.error("물체 위치·회전각은 유한한 값이어야 합니다")
     if args.mode == "gui" and sys.platform.startswith("linux") and not os.getenv("DISPLAY"):
-        parser.error("GUI needs DISPLAY; use --mode direct")
+        parser.error("창을 표시할 수 없습니다. 데스크톱 터미널에서 실행하거나 --mode direct를 사용하세요")
     now = datetime.now(KST)
     run_id = now.strftime("%Y%m%dT%H%M%S_%f")
     output = args.output_dir or Path(__file__).resolve().parents[1] / "outputs" / "contact-grasp" / run_id
@@ -576,7 +576,7 @@ def main():
         for scenario in scenarios:
             count = args.trials if scenario in ("normal", "transport") or args.scenario not in ("all", "all_transport") else 1
             for index in range(count):
-                print(f"[{scenario} #{index + 1}] pose_source={args.pose_source}, shape={args.object_shape}", flush=True)
+                print(f"[{NAMES[scenario]} {index + 1}회차] 좌표: {NAMES[args.pose_source]}, 도형: {NAMES[args.object_shape]}", flush=True)
                 with (output / f"{scenario}_{index + 1}.jsonl").open("w") as log:
                     # 각 시도의 관측 이미지는 개별 폴더에 보관한다.
                     observation_output = output / f"{scenario}_{index + 1}"
@@ -585,14 +585,17 @@ def main():
                     results.append(Probe(args.mode == "gui", log, args.pose_source, observation_output,
                                          (args.block_x, args.block_y, args.block_yaw), camera,
                                          args.object_shape, (args.cylinder_diameter, args.cylinder_height)).run(scenario, index + 1))
-                print("TRIAL_JSON=" + json.dumps(results[-1]), flush=True)
+                # 자세한 수치는 저장 로그에 남기고 터미널에는 주요 판정을 보여준다.
+                result = results[-1]
+                print(f"실험 결과: 들림 {verdict(result['lift_success'])}, 상자 도착 {verdict(result['arrival_success'])}, "
+                      f"대조 조건 확인 {verdict(result['expectation_met'])}, 원인: {failure_name(result['failure_reason'])}", flush=True)
         summary = {
             "run_id": run_id, "recorded_at_kst": now.isoformat(),
             "config_ref": str(output / "config.json"), "trials": results,
             "all_expectations_met": all(r["expectation_met"] for r in results),
         }
         (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-        print("SUMMARY_PATH=" + str(output / "summary.json"), flush=True)
+        print("결과 파일: " + str(output / "summary.json"), flush=True)
         return 0 if summary["all_expectations_met"] else 1
     except KeyboardInterrupt:
         print("중단했습니다. 전체 실험을 통과했다고 기록하지 않습니다.", flush=True)
