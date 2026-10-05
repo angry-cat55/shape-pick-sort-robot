@@ -13,6 +13,29 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class CameraTests(unittest.TestCase):
+    def test_square_and_nearly_square_top_from_real_camera(self):
+        import math
+        from multi_object_scene import LAYOUT, build_scene, settle_scene
+        from rgbd_camera import capture, estimate
+        client = p.connect(p.DIRECT)
+        try:
+            # 정답 크기·각도는 장면 생성과 오차 평가에만 사용한다.
+            for size in ([0.064, 0.064, 0.03], [0.064, 0.064, 0.07], [0.064, 0.062, 0.07]):
+                for yaw in (-0.9, 0, 0.7):
+                    with self.subTest(size=size, yaw=yaw):
+                        scene = build_scene([{"shape": "cuboid", "xy": [0.5, 0], "yaw": yaw, "size_m": size}], LAYOUT)
+                        self.assertTrue(settle_scene(scene)["settled"])
+                        result = estimate(capture(scene["camera"]), scene["empty"], scene["camera"])
+                        self.assertTrue(result["valid"], result)
+                        self.assertLess(math.dist(result["center_xy_m"], [0.5, 0]), 0.002)
+                        self.assertAlmostEqual(result["width_m"], min(size[:2]), delta=0.001)
+                        # 정사각형은 90도 돌아도 같은 면을 잡는다. 거의 정사각형은 긴 축을 따른다.
+                        period = math.pi / 2 if size[0] == size[1] else math.pi
+                        error = abs((result["yaw_rad"] - yaw + period / 2) % period - period / 2)
+                        self.assertLess(error, 0.02)
+        finally:
+            p.disconnect(client)
+
     def test_cylinder_top_center_diameter_and_height_from_rendered_depth(self):
         from rgbd_camera import CAMERA, capture, estimate
 

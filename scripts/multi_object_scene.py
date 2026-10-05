@@ -330,7 +330,7 @@ def return_to_wait(probe, scene):
         raise RuntimeError("wait_pose_not_reached")
 
 
-def sort_scene(scene, shape, output, gui=False):
+def sort_scene(scene, shape, output, gui=False, supported_top_m=None):
     if shape not in ("cuboid", "cylinder") or any(o["shape"] != shape for o in scene["objects"]):
         raise ValueError("CNN 연결 전에는 수동 지정한 한 종류만 운반합니다")
     output.mkdir(parents=True, exist_ok=True)
@@ -345,7 +345,7 @@ def sort_scene(scene, shape, output, gui=False):
         try:
             for iteration in range(6):
                 observation = capture(scene["camera"])
-                candidates = estimate_many(observation, scene["empty"], scene["camera"], shape)
+                candidates = estimate_many(observation, scene["empty"], scene["camera"], shape, supported_top_m)
                 scan_dir = output / f"scan_{iteration:02d}"
                 scan_dir.mkdir(parents=True, exist_ok=True)
                 save_observation(scan_dir, observation, scene["empty"], {"valid": False}, scene["camera"])
