@@ -573,6 +573,140 @@ def recover_pick(probe, scene, plan, cause):
     probe.drop_via_relative_motion = False
 
 
+def execute_pick(probe, scene, geometry, pick, placed_counts, remaining):
+    # 한 물체를 실제 접촉으로 옮긴다. 기존 CLI와 ROS2에서 같은 제어·판정을 사용한다.
+    # 목표는 카메라 기하와 CNN 종류에서 만들고, 생성 정답은 평가에만 사용한다.
+    plan = pick["grasp_plan"]
+    target_shape = geometry["object_shape"]
+    matches = sorted(
+        (
+            math.dist(
+                geometry["center_xy_m"],
+                p.getBasePositionAndOrientation(body)[0][:2],
+            ),
+            body,
+        )
+        for body in remaining
+    )
+    if not matches or matches[0][0] > 0.01:
+        raise RuntimeError("evaluation_target_unmatched")
+    probe.block = matches[0][1]
+    pick["evaluation_body_id"] = probe.block
+    pick["evaluation_xy_error_m"] = matches[0][0]
+    # 정답 종류는 점수 기록·최종 도착 평가에만 쓴다. 계획과 목적지를 바꾸지 않는다.
+    true_shape = next(o["shape"] for o in scene["objects"] if o["body"] == probe.block)
+    pick.update(
+        true_class=true_shape,
+        classification_correct=target_shape == true_shape,
+    )
+    probe.supports = (
+        [scene["table"]]
+        + [part for b in scene["bins"].values() for part in b["parts"]]
+        + [o["body"] for o in scene["objects"] if o["body"] != probe.block]
+    )
+    probe.drop_via_relative_motion = False
+    x, y, z = plan["position_m"]
+    probe.orientation = p.getQuaternionFromEuler([math.pi, 0, plan["yaw_rad"]])
+    # 물체 위에서 집게를 벌린 다음 내려가서 닫는다.
+    probe.gripper(plan["opening_per_finger_m"])
+    probe.move("APPROACH", [x, y, 0.50], 1.5)
+    probe.move("DESCEND", [x, y, z], 1.2)
+    probe.gripper(0)
+    probe.wait("CLOSE", 0.8)
+    probe.move("LIFT", [x, y, z + 0.10], 1.5)
+    probe.verify_hold(pick)
+    if not pick["lift_success"]:
+        raise RuntimeError("lift_not_verified")
+    probe.move("CLEARANCE", [x, y, 0.65], 1.0)
+    if probe.drop_via_relative_motion:
+        raise RuntimeError("drop_during_transport")
+    # 몸통을 가로지르지 않도록 높은 위치에서 바깥쪽으로 돌아 뒤 상자로 간다.
+    destination = scene["bins"][target_shape]["slots"][placed_counts[target_shape]]
+    direction = 1 if destination[1] > 0 else -1
+    probe.carry_arc(direction)
+    if probe.drop_via_relative_motion:
+        raise RuntimeError("drop_during_transport")
+    # 상자에서는 긴 변과 손끝 방향을 나란하게 맞춰 벽과 개방 공간을 확보한다.
+    probe.orientation = p.getQuaternionFromEuler([math.pi, 0, direction * math.pi])
+    probe.move("BIN_ABOVE", [*destination, 0.50], 1.0)
+    if probe.drop_via_relative_motion:
+        raise RuntimeError("drop_during_transport")
+    # 바닥 가까이 내려놓는다. 실제 정착은 접촉과 속도로 따로 확인한다.
+    release_z = max(
+        z + CONFIG["bin_floor_thickness_m"],
+        scene["bins"][target_shape]["floor_top"]
+        + CONFIG["bin_release_tcp_floor_clearance_m"],
+    )
+    pick["release_tcp_z_m"] = release_z
+    probe.move("BIN_PLACE", [*destination, release_z], 1.2)
+    if probe.drop_via_relative_motion:
+        raise RuntimeError("drop_during_transport")
+    probe.carry_reference = None
+    # 놓을 때만 낮은 고정 개방 힘을 쓴다. 집는 힘·마찰을 추정하거나 자동 조절하지 않는다.
+    p.setJointMotorControlArray(
+        probe.robot,
+        probe.fingers,
+        p.POSITION_CONTROL,
+        targetPositions=[0.04, 0.04],
+        forces=[0.1, 0.1],
+    )
+    probe.wait("RELEASE", 1.0)
+    probe.move("RETREAT", [*destination, 0.65], 1.0)
+    # 낙하 후 흔들림이 멎는 시간은 일정하지 않다. 최대 5초 안에 0.5초 연속 정착을 확인한다.
+    probe.start_stage("VERIFY_ARRIVAL")
+    consecutive = {name: 0 for name in probe.bins}
+    for _ in range(round(5.0 / CONFIG["dt_s"])):
+        sample = probe.step()
+        for name in consecutive:
+            consecutive[name] = (
+                consecutive[name] + 1 if sample["bin_arrivals"][name] else 0
+            )
+        if any(
+            n >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
+            for n in consecutive.values()
+        ):
+            break
+    # 지정한 상자 도착, 다른 상자 도착, 정착 실패를 구분한다.
+    pick["bin_arrivals"] = {
+        name: n >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
+        for name, n in consecutive.items()
+    }
+    pick["arrival_success"] = pick["bin_arrivals"][target_shape]
+    pick["correct_bin_arrival"] = pick["bin_arrivals"][true_shape]
+    if not pick["arrival_success"]:
+        raise RuntimeError(
+            "wrong_bin_arrival"
+            if any(pick["bin_arrivals"].values())
+            else "arrival_not_verified"
+        )
+    if not pick["correct_bin_arrival"]:
+        raise RuntimeError("classification_wrong_bin")
+    placed_counts[target_shape] += 1
+    remaining.remove(probe.block)
+    # 팔을 촬영 때의 대기 자세로 돌린 뒤 다음 물체의 시도 횟수를 새로 센다.
+    return_to_wait(probe, scene)
+
+
+def verify_final_arrivals(probe, scene):
+    # 앞서 놓은 물체도 모두 함께 안정된 상태인지 마지막에 다시 확인한다.
+    probe.start_stage('VERIFY_FINAL_ARRIVAL')
+    consecutive = {str(o['body']): 0 for o in scene['objects']}
+    required = round(CONFIG['arrival_hold_s'] / CONFIG['dt_s'])
+    # 마지막 후퇴 직후의 순간 흔들림은 기다린다. 모두가0.5초 연속 정착해야 통과한다.
+    # 개별 도착 검사와 같이 최대5초까지만 기다리고 판정 조건 자체는 완화하지 않는다.
+    for _ in range(round(5.0 / CONFIG['dt_s'])):
+        probe.step()
+        for o in scene['objects']:
+            probe.block = o['body']
+            key = str(o['body'])
+            stable = probe.measure()['bin_arrivals'][o['shape']]
+            consecutive[key] = consecutive[key] + 1 if stable else 0
+        if all(n >= required for n in consecutive.values()):
+            break
+    final = {key: n >= required for key, n in consecutive.items()}
+    return final
+
+
 def sort_scene(
     scene,
     shape,
@@ -741,124 +875,8 @@ def sort_scene(
                     "failure_reason": "",
                 }
                 report["picks"].append(pick)
-                matches = sorted(
-                    (
-                        math.dist(
-                            geometry["center_xy_m"],
-                            p.getBasePositionAndOrientation(body)[0][:2],
-                        ),
-                        body,
-                    )
-                    for body in remaining
-                )
-                if not matches or matches[0][0] > 0.01:
-                    raise RuntimeError("evaluation_target_unmatched")
-                probe.block = matches[0][1]
-                pick["evaluation_body_id"] = probe.block
-                pick["evaluation_xy_error_m"] = matches[0][0]
-                # 정답 종류는 점수 기록·최종 도착 평가에만 쓴다. 계획과 목적지를 바꾸지 않는다.
-                true_shape = next(
-                    o["shape"] for o in scene["objects"] if o["body"] == probe.block
-                )
-                pick.update(
-                    true_class=true_shape,
-                    classification_correct=target_shape == true_shape,
-                )
-                probe.supports = (
-                    [scene["table"]]
-                    + [part for b in scene["bins"].values() for part in b["parts"]]
-                    + [o["body"] for o in scene["objects"] if o["body"] != probe.block]
-                )
-                probe.drop_via_relative_motion = False
                 try:
-                    x, y, z = plan["position_m"]
-                    probe.orientation = p.getQuaternionFromEuler(
-                        [math.pi, 0, plan["yaw_rad"]]
-                    )
-                    # 물체 위에서 집게를 벌린 다음 내려가서 닫는다.
-                    probe.gripper(plan["opening_per_finger_m"])
-                    probe.move("APPROACH", [x, y, 0.50], 1.5)
-                    probe.move("DESCEND", [x, y, z], 1.2)
-                    probe.gripper(0)
-                    probe.wait("CLOSE", 0.8)
-                    probe.move("LIFT", [x, y, z + 0.10], 1.5)
-                    probe.verify_hold(pick)
-                    if not pick["lift_success"]:
-                        raise RuntimeError("lift_not_verified")
-                    probe.move("CLEARANCE", [x, y, 0.65], 1.0)
-                    if probe.drop_via_relative_motion:
-                        raise RuntimeError("drop_during_transport")
-                    # 몸통을 가로지르지 않도록 높은 위치에서 바깥쪽으로 돌아 뒤 상자로 간다.
-                    destination = scene["bins"][target_shape]["slots"][
-                        placed_counts[target_shape]
-                    ]
-                    direction = 1 if destination[1] > 0 else -1
-                    probe.carry_arc(direction)
-                    if probe.drop_via_relative_motion:
-                        raise RuntimeError("drop_during_transport")
-                    # 상자에서는 긴 변과 손끝 방향을 나란하게 맞춰 벽과 개방 공간을 확보한다.
-                    probe.orientation = p.getQuaternionFromEuler(
-                        [math.pi, 0, direction * math.pi]
-                    )
-                    probe.move("BIN_ABOVE", [*destination, 0.50], 1.0)
-                    if probe.drop_via_relative_motion:
-                        raise RuntimeError("drop_during_transport")
-                    # 바닥 가까이 내려놓는다. 실제 정착은 접촉과 속도로 따로 확인한다.
-                    release_z = max(
-                        z + CONFIG["bin_floor_thickness_m"],
-                        scene["bins"][target_shape]["floor_top"]
-                        + CONFIG["bin_release_tcp_floor_clearance_m"],
-                    )
-                    pick["release_tcp_z_m"] = release_z
-                    probe.move("BIN_PLACE", [*destination, release_z], 1.2)
-                    if probe.drop_via_relative_motion:
-                        raise RuntimeError("drop_during_transport")
-                    probe.carry_reference = None
-                    # 놓을 때만 낮은 고정 개방 힘을 쓴다. 집는 힘·마찰을 추정하거나 자동 조절하지 않는다.
-                    p.setJointMotorControlArray(
-                        probe.robot,
-                        probe.fingers,
-                        p.POSITION_CONTROL,
-                        targetPositions=[0.04, 0.04],
-                        forces=[0.1, 0.1],
-                    )
-                    probe.wait("RELEASE", 1.0)
-                    probe.move("RETREAT", [*destination, 0.65], 1.0)
-                    # 낙하 후 흔들림이 멎는 시간은 일정하지 않다. 최대 5초 안에 0.5초 연속 정착을 확인한다.
-                    probe.start_stage("VERIFY_ARRIVAL")
-                    consecutive = {name: 0 for name in probe.bins}
-                    for _ in range(round(5.0 / CONFIG["dt_s"])):
-                        sample = probe.step()
-                        for name in consecutive:
-                            consecutive[name] = (
-                                consecutive[name] + 1
-                                if sample["bin_arrivals"][name]
-                                else 0
-                            )
-                        if any(
-                            n >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
-                            for n in consecutive.values()
-                        ):
-                            break
-                    # 지정한 상자 도착, 다른 상자 도착, 정착 실패를 구분한다.
-                    pick["bin_arrivals"] = {
-                        name: n >= round(CONFIG["arrival_hold_s"] / CONFIG["dt_s"])
-                        for name, n in consecutive.items()
-                    }
-                    pick["arrival_success"] = pick["bin_arrivals"][target_shape]
-                    pick["correct_bin_arrival"] = pick["bin_arrivals"][true_shape]
-                    if not pick["arrival_success"]:
-                        raise RuntimeError(
-                            "wrong_bin_arrival"
-                            if any(pick["bin_arrivals"].values())
-                            else "arrival_not_verified"
-                        )
-                    if not pick["correct_bin_arrival"]:
-                        raise RuntimeError("classification_wrong_bin")
-                    placed_counts[target_shape] += 1
-                    remaining.remove(probe.block)
-                    # 팔을 촬영 때의 대기 자세로 돌린 뒤 다음 물체의 시도 횟수를 새로 센다.
-                    return_to_wait(probe, scene)
+                    execute_pick(probe, scene, geometry, pick, placed_counts, remaining)
                     retry_count = 0
                     retry_xy = None
                 except RuntimeError as error:
@@ -917,21 +935,7 @@ def sort_scene(
         # 앞서 놓은 물체가 나중 동작에 밀려나지 않았는지 최종 상태도 별도로 검사한다.
         try:
             if report["success"]:
-                probe.start_stage('VERIFY_FINAL_ARRIVAL')
-                consecutive = {str(o['body']): 0 for o in scene['objects']}
-                required = round(CONFIG['arrival_hold_s'] / CONFIG['dt_s'])
-                # 마지막 후퇴 직후의 순간 흔들림은 기다린다. 모두가0.5초 연속 정착해야 통과한다.
-                # 개별 도착 검사와 같이 최대5초까지만 기다리고 판정 조건 자체는 완화하지 않는다.
-                for _ in range(round(5.0 / CONFIG['dt_s'])):
-                    probe.step()
-                    for o in scene['objects']:
-                        probe.block = o['body']
-                        key = str(o['body'])
-                        stable = probe.measure()['bin_arrivals'][o['shape']]
-                        consecutive[key] = consecutive[key] + 1 if stable else 0
-                    if all(n >= required for n in consecutive.values()):
-                        break
-                final = {key: n >= required for key, n in consecutive.items()}
+                final = verify_final_arrivals(probe, scene)
                 report['final_arrivals'] = final
                 if not all(final.values()):
                     report.update(
