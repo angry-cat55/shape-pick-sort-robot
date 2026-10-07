@@ -43,3 +43,9 @@ Thumbs.db
 
 # Notebook editor checkpoints (the source notebook stays in Git)
 .ipynb_checkpoints/
+
+# Detailed personal records and earlier standalone experiment tests (kept locally)
+/docs/DECISIONS_KO.md
+/docs/experiments.csv
+/tests/test_contact_grasp_probe.py
+/tests/test_terminal_ko.py
