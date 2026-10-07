@@ -227,19 +227,24 @@ class ShapeSortApp:
         self.build_widgets()
         self.cuboids.trace_add("write", self.on_count_changed)
         self.cylinders.trace_add("write", self.on_count_changed)
-        self.root.after(80, self.poll_run)
+        self.poll_after_id = self.root.after(80, self.poll_run)
 
     def build_widgets(self):
         ttk = self.ttk
+        # 공통 글꼴을 먼저 키워 라벨·입력칸·버튼 크기가 함께 따라가도록 한다.
+        from tkinter import font as tk_font
+
+        tk_font.nametofont("TkDefaultFont").configure(size=13)
+        tk_font.nametofont("TkTextFont").configure(size=13)
         style = ttk.Style(self.root)
         style.theme_use("clam")
         style.configure("TFrame", background="#f3f5f9")
         style.configure("TLabel", background="#f3f5f9", foreground="#243448")
-        style.configure("Title.TLabel", font=("TkDefaultFont", 18, "bold"))
+        style.configure("Title.TLabel", font=("TkDefaultFont", 21, "bold"))
         style.configure(
-            "Small.TLabel", font=("TkDefaultFont", 10), foreground="#64748b"
+            "Small.TLabel", font=("TkDefaultFont", 12), foreground="#64748b"
         )
-        style.configure("Status.TLabel", font=("TkDefaultFont", 11, "bold"))
+        style.configure("Status.TLabel", font=("TkDefaultFont", 13, "bold"))
         style.configure(
             "Start.TButton", background="#0f766e", foreground="white", padding=9
         )
@@ -264,11 +269,12 @@ class ShapeSortApp:
 
         body = ttk.Frame(self.root, padding=(18, 0, 18, 0))
         body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, minsize=250)
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
         settings = ttk.Frame(body, padding=(0, 12, 16, 0))
-        settings.grid(row=0, column=0, sticky="ns")
-        ttk.Label(settings, text="도형 선택", font=("TkDefaultFont", 12, "bold")).grid(
+        settings.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(settings, text="도형 선택", font=("TkDefaultFont", 14, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
         self.count_inputs = []
@@ -282,14 +288,15 @@ class ShapeSortApp:
                 settings,
                 from_=0,
                 to=5,
-                width=4,
+                width=8,
+                font=("TkDefaultFont", 13),
                 textvariable=variable,
                 justify="center",
             )
             field.grid(row=row, column=1, sticky="e", pady=5)
             self.count_inputs.append(field)
         ttk.Label(
-            settings, textvariable=self.count_text, style="Small.TLabel", wraplength=165
+            settings, textvariable=self.count_text, style="Small.TLabel", wraplength=220
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 14))
 
         # 실행 중에는 설정과 시작을 잠그고, 종료 버튼만 사용할 수 있도록 한다.
@@ -306,7 +313,7 @@ class ShapeSortApp:
             row=7, column=0, columnspan=2, sticky="w", pady=(12, 4)
         )
         ttk.Label(
-            settings, textvariable=self.status, style="Status.TLabel", wraplength=165
+            settings, textvariable=self.status, style="Status.TLabel", wraplength=220
         ).grid(row=8, column=0, columnspan=2, sticky="w")
 
         # 로그는 선택·복사는 가능하지만 입력으로 수정할 수 없는 텍스트 영역이다.
@@ -314,8 +321,36 @@ class ShapeSortApp:
         logs.grid(row=0, column=1, sticky="nsew")
         logs.columnconfigure(0, weight=1)
         logs.rowconfigure(1, weight=1)
-        ttk.Label(logs, text="실행 로그", font=("TkDefaultFont", 12, "bold")).grid(
-            row=0, column=0, sticky="w", pady=(12, 8)
+        logs.rowconfigure(3, weight=2)
+
+        # 통신 기록과 로봇 실행 기록을 나눠, 메시지 교환 순서를 위에서 읽게 한다.
+        ttk.Label(
+            logs, text="ROS 통신 · 액션 미사용", font=("TkDefaultFont", 14, "bold")
+        ).grid(row=0, column=0, sticky="w", pady=(12, 8))
+        self.communication_text = self.tk.Text(
+            logs,
+            state="disabled",
+            wrap="word",
+            width=30,
+            height=7,
+            background="#e5edf5",
+            foreground="#243448",
+            font=("TkFixedFont", 12),
+            padx=12,
+            pady=10,
+            borderwidth=0,
+        )
+        self.communication_text.grid(row=1, column=0, sticky="nsew")
+        communication_scroll = ttk.Scrollbar(
+            logs, orient="vertical", command=self.communication_text.yview
+        )
+        communication_scroll.grid(row=1, column=1, sticky="ns")
+        self.communication_text.configure(yscrollcommand=communication_scroll.set)
+        self.append_communication(
+            "토픽: 발행·수신 / 서비스: 요청·응답\n액션: 현재 프로젝트에서 사용하지 않음\n"
+        )
+        ttk.Label(logs, text="실행 로그", font=("TkDefaultFont", 14, "bold")).grid(
+            row=2, column=0, sticky="w", pady=(12, 8)
         )
         self.log_text = self.tk.Text(
             logs,
@@ -326,14 +361,14 @@ class ShapeSortApp:
             background="#172334",
             foreground="#dbe7f3",
             insertbackground="white",
-            font=("TkFixedFont", 10),
+            font=("TkFixedFont", 12),
             padx=12,
             pady=10,
             borderwidth=0,
         )
-        self.log_text.grid(row=1, column=0, sticky="nsew")
+        self.log_text.grid(row=3, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(logs, orient="vertical", command=self.log_text.yview)
-        scroll.grid(row=1, column=1, sticky="ns")
+        scroll.grid(row=3, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scroll.set)
         self.log_text.tag_configure("error", foreground="#fda4af")
         self.log_text.tag_configure("note", foreground="#67e8f9")
@@ -343,6 +378,19 @@ class ShapeSortApp:
             style="Small.TLabel",
             padding=(18, 8),
         ).grid(row=2, column=0, sticky="w")
+
+    def append_communication(self, text):
+        # 두 로그 모두 읽기 전용이며, 최근 기록만 유지해 장시간 실행도 부담을 줄인다.
+        field = self.communication_text
+        follow = field.yview()[1] >= 0.98
+        field.configure(state="normal")
+        field.insert("end", text)
+        lines = int(field.index("end-1c").split(".")[0])
+        if lines > 1000:
+            field.delete("1.0", f"{lines - 1000}.0")
+        field.configure(state="disabled")
+        if follow:
+            field.see("end")
 
     def append_log(self, text, tag=None):
         # 사용자가 지난 로그를 읽고 있으면 스크롤 위치를 강제로 맨 아래로 보내지 않는다.
@@ -454,6 +502,7 @@ class ShapeSortApp:
         self.run.stop()
 
     def poll_run(self):
+        self.poll_after_id = None
         # 한 번에 처리할 로그 수를 제한해 출력이 많아도 버튼·창 이동이 계속 반응하게 한다.
         if self.run is not None:
             for _ in range(200):
@@ -462,6 +511,10 @@ class ShapeSortApp:
                 except queue.Empty:
                     break
                 if kind == "log":
+                    # 노드가 실제 통신 시점에 남긴 기록만 위쪽 통신 창으로 보낸다.
+                    if "[ROS통신]" in data:
+                        self.append_communication(data)
+                        continue
                     self.append_log(
                         data,
                         "error" if "[ERROR]" in data or "Traceback" in data else None,
@@ -509,16 +562,23 @@ class ShapeSortApp:
 
         # 창 닫기도 작업 스레드가 정리될 때까지 GUI 이벤트를 유지한 뒤 끝낸다.
         if self.closing and (self.run is None or self.run.finished.is_set()):
-            self.root.destroy()
+            self.destroy_window()
             return
-        self.root.after(80, self.poll_run)
+        self.poll_after_id = self.root.after(80, self.poll_run)
+
+    def destroy_window(self):
+        # 창을 닫은 뒤 남은 예약 콜백이 없는 위젯을 건드리지 않도록 함께 취소한다.
+        if self.poll_after_id is not None:
+            self.root.after_cancel(self.poll_after_id)
+            self.poll_after_id = None
+        self.root.destroy()
 
     def close_app(self):
         self.closing = True
         self.start_button.configure(state="disabled")
         self.stop_run()
         if self.run is None or self.run.finished.is_set():
-            self.root.destroy()
+            self.destroy_window()
 
 
 def main():

@@ -135,3 +135,8 @@ def choose_target(candidates, retry_xy=None):
     if len(nearby) > 1 and math.dist(nearby[1]["center_xy_m"], retry_xy) <= 0.03:
         raise RuntimeError("retry_target_ambiguous")
     return nearby[0]
+
+
+def log_communication(node, kind, name, event, detail):
+    # 영상·좌표 원문 대신 식별 번호와 동작만 기록해 GUI에서 통신 흐름을 읽게 한다.
+    node.get_logger().info(f"[ROS통신] [{kind}] {event} {name} | {detail}")

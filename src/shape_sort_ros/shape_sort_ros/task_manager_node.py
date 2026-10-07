@@ -15,6 +15,8 @@ from shape_sort_interfaces.srv import RobotCommand
 from terminal_ko import failure_name
 from shape_sort_ros.protocol import candidate_dict, candidate_message, choose_target
 
+from shape_sort_ros.protocol import log_communication
+
 
 class TaskManagerNode(Node):
     def __init__(self):
@@ -54,10 +56,10 @@ class TaskManagerNode(Node):
             Trigger, "/shape_sort/perception_ready"
         )
         self.start_service = self.create_service(
-            Trigger, "/shape_sort/start", self.start_task
+            Trigger, "/shape_sort/start", self.on_start_service
         )
         self.stop_service = self.create_service(
-            Trigger, "/shape_sort/stop", self.stop_task
+            Trigger, "/shape_sort/stop", self.on_stop_service
         )
 
         # 한 번에 한 명령만 기다린다. 번호가 다른 결과는 새 작업에 섞지 않는다.
@@ -101,6 +103,30 @@ class TaskManagerNode(Node):
             {"retry_index": self.retry_count, "remaining_count": self.remaining_count}
         )
         self.status_pub.publish(message)
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/task_status",
+            "발행",
+            f"명령 {message.command_id} · 상태 {stage}",
+        )
+
+    def on_start_service(self, request, response):
+        # 서비스로 들어온 시작만 기록한다. 내부 자동 시작을 ROS 요청으로 표시하지 않는다.
+        log_communication(self, "서비스", "/shape_sort/start", "요청 수신", "작업 시작")
+        response = self.start_task(request, response)
+        log_communication(
+            self, "서비스", "/shape_sort/start", "응답 준비", response.message
+        )
+        return response
+
+    def on_stop_service(self, request, response):
+        log_communication(self, "서비스", "/shape_sort/stop", "요청 수신", "작업 중단")
+        response = self.stop_task(request, response)
+        log_communication(
+            self, "서비스", "/shape_sort/stop", "응답 준비", response.message
+        )
+        return response
 
     def start_task(self, request, response):
         # 서비스 응답은 시작 접수다. 전체 운반 성공은 task_status에서 따로 확인한다.
@@ -172,6 +198,13 @@ class TaskManagerNode(Node):
         self.deadline = time.monotonic() + self.timeout
         self.publish_status(command.upper())
         future = self.robot_client.call_async(request)
+        log_communication(
+            self,
+            "서비스",
+            "/shape_sort/robot_command",
+            "요청 전송",
+            f"명령 {request.command_id} · {command}",
+        )
         future.add_done_callback(
             lambda future: self.on_accepted(request.command_id, future)
         )
@@ -186,6 +219,13 @@ class TaskManagerNode(Node):
             return
         try:
             response = future.result()
+            log_communication(
+                self,
+                "서비스",
+                "/shape_sort/robot_command",
+                "응답 수신",
+                f"명령 {command_id} · 접수 {'성공' if response.accepted else '거절'}",
+            )
             if not response.accepted:
                 self.finish(False, "command_rejected: " + response.reason)
         except Exception as error:
@@ -197,6 +237,13 @@ class TaskManagerNode(Node):
         self.send_command("scan")
 
     def on_perception(self, message):
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/perception",
+            "수신",
+            f"촬영 {message.scan_id} · 후보 {len(message.candidates)}개",
+        )
         # 이전 영상의 늦은 결과가 운반 뒤 새 좌표로 사용되지 않도록 번호를 확인한다.
         if self.phase not in ("scan", "perception") or message.scan_id != self.scan_id:
             return
@@ -254,6 +301,13 @@ class TaskManagerNode(Node):
             self.finish(False, str(error))
 
     def on_robot_status(self, message):
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/robot_status",
+            "수신",
+            f"명령 {message.command_id} · 상태 {message.stage}",
+        )
         # 준비 상태는 명령 번호0이다. 이후에는 현재 기다리는 명령의 완료만 처리한다.
         if message.stage == "INITIALIZATION_FAILED":
             self.finish(False, "initialization_failed: " + message.failure_reason)

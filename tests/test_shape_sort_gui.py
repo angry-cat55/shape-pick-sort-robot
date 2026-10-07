@@ -190,6 +190,38 @@ class GuiWindowTests(unittest.TestCase):
                     app.run.stop()
                     app.run.finished.wait(8)
                 try:
-                    root.destroy()
+                    app.close_app()
                 except tk.TclError:
                     pass
+
+    def test_actual_process_lines_go_to_separate_readonly_panels(self):
+        import tkinter as tk
+
+        root = tk.Tk()
+        root.withdraw()
+        app = gui.ShapeSortApp(root)
+        with tempfile.TemporaryDirectory() as folder:
+            try:
+                # 자식 출력이 큐를 거쳐 올바른 창에 들어가는지 실제 Tk 이벤트로 확인한다.
+                code = "print('[ROS통신] [토픽] 발행 /shape_sort/observation'); print('물체 들어 올리기')"
+                app.run = gui.SimulationProcess(
+                    [sys.executable, '-u', '-c', code], Path(folder), Path(folder)
+                )
+                app.run.start()
+                deadline = time.monotonic() + 8
+                while not app.closed_handled:
+                    self.assertLess(time.monotonic(), deadline)
+                    root.update()
+                    time.sleep(0.01)
+                communication = app.communication_text.get('1.0', 'end')
+                execution = app.log_text.get('1.0', 'end')
+                self.assertIn('/shape_sort/observation', communication)
+                self.assertNotIn('/shape_sort/observation', execution)
+                self.assertIn('물체 들어 올리기', execution)
+                self.assertEqual(str(app.communication_text['state']), 'disabled')
+                self.assertGreaterEqual(app.count_inputs[0].winfo_reqwidth(), 90)
+            finally:
+                if app.run is not None:
+                    app.run.stop()
+                    app.run.finished.wait(8)
+                app.close_app()

@@ -14,6 +14,8 @@ from cnn_inference import CnnClassifier
 from rgbd_camera import estimate_many, rgb_crop, save_observation
 from shape_sort_ros.protocol import candidate_message, image_array
 
+from shape_sort_ros.protocol import log_communication
+
 
 class PerceptionNode(Node):
     def __init__(self):
@@ -60,11 +62,24 @@ class PerceptionNode(Node):
         self.get_logger().info("CNN 준비 완료: 카메라 관측을 기다립니다")
 
     def on_ready(self, request, response):
+        log_communication(
+            self, "서비스", "/shape_sort/perception_ready", "요청 수신", "CNN 준비 확인"
+        )
         response.success = True
         response.message = "CNN과 카메라 구독이 준비되었습니다"
+        log_communication(
+            self,
+            "서비스",
+            "/shape_sort/perception_ready",
+            "응답 준비",
+            response.message,
+        )
         return response
 
     def on_observation(self, message):
+        log_communication(
+            self, "토픽", "/shape_sort/observation", "수신", f"촬영 {message.scan_id}"
+        )
         # 중복 관측을 다시 분류하지 않는다. 물체 이동 뒤에는 반드시 새 번호를 받는다.
         if message.scan_id <= self.last_scan_id:
             return
@@ -132,6 +147,13 @@ class PerceptionNode(Node):
             result.failure_reason = str(error)
             self.get_logger().error("인식 실패: " + str(error))
         self.publisher.publish(result)
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/perception",
+            "발행",
+            f"촬영 {result.scan_id} · 후보 {len(result.candidates)}개",
+        )
 
 
 def main(args=None):

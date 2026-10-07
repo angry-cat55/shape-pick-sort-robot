@@ -30,6 +30,8 @@ from rgbd_camera import capture
 from terminal_ko import failure_name
 from shape_sort_ros.protocol import candidate_dict, image_message, validate_target
 
+from shape_sort_ros.protocol import log_communication
+
 
 class SimulationNode(Node):
     def __init__(self):
@@ -59,7 +61,7 @@ class SimulationNode(Node):
             CameraObservation, "/shape_sort/observation", 1
         )
         self.service = self.create_service(
-            RobotCommand, "/shape_sort/robot_command", self.accept_command
+            RobotCommand, "/shape_sort/robot_command", self.on_robot_command
         )
 
         # ROS 콜백은 접수만 하고, PyBullet은 이 작업 스레드 한 곳에서만 호출한다.
@@ -97,6 +99,32 @@ class SimulationNode(Node):
         message.failure_reason = reason
         message.result_json = json.dumps(result or {}, allow_nan=False)
         self.status_pub.publish(message)
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/robot_status",
+            "발행",
+            f"명령 {message.command_id} · 상태 {stage}",
+        )
+
+    def on_robot_command(self, request, response):
+        log_communication(
+            self,
+            "서비스",
+            "/shape_sort/robot_command",
+            "요청 수신",
+            f"명령 {request.command_id} · {request.command}",
+        )
+        # 접수 판단은 기존 함수에 맡기고, 응답을 돌려주기 직전에 결과만 기록한다.
+        response = self.accept_command(request, response)
+        log_communication(
+            self,
+            "서비스",
+            "/shape_sort/robot_command",
+            "응답 준비",
+            f"명령 {request.command_id} · 접수 {'성공' if response.accepted else '거절'}",
+        )
+        return response
 
     def accept_command(self, request, response):
         # 정지는 동작 중에도 접수한다. 다음 물리 스텝에서 팔 이동을 중단한다.
@@ -262,6 +290,13 @@ class SimulationNode(Node):
             self.last_scan_id = request.scan_id
             self.scan_used = False
         self.camera_pub.publish(message)
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/observation",
+            "발행",
+            f"촬영 {message.scan_id} · RGB/깊이 영상",
+        )
         return {"remaining_count": len(self.remaining)}
 
     def pick(self, request):
