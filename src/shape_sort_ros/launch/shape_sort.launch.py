@@ -47,6 +47,9 @@ def generate_launch_description():
         **common,
         executable="simulation_node",
         name="simulation_node",
+        # ROS 노드 이름과 터미널의 프로세스 표시 이름을 함께 맞춘다.
+        exec_name="simulation_node",
+        output_format="[simulation_node] {line}",
         parameters=[
             {
                 "mode": value("mode", str),
@@ -62,6 +65,8 @@ def generate_launch_description():
         **common,
         executable="perception_node",
         name="perception_node",
+        exec_name="perception_node",
+        output_format="[perception_node] {line}",
         parameters=[
             {
                 "model_dir": value("model_dir", str),
@@ -73,6 +78,8 @@ def generate_launch_description():
         **common,
         executable="task_manager_node",
         name="task_manager_node",
+        exec_name="task_manager_node",
+        output_format="[task_manager_node] {line}",
         parameters=[
             {
                 "auto_start": value("auto_start", bool),
