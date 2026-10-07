@@ -27,6 +27,7 @@ from multi_object_scene import (
     verify_final_arrivals,
 )
 from rgbd_camera import capture
+from terminal_ko import failure_name
 from shape_sort_ros.protocol import candidate_dict, image_message, validate_target
 
 
@@ -346,7 +347,7 @@ class SimulationNode(Node):
                         "pick": self.failed_pick,
                         "remaining_count": len(self.remaining),
                     }
-                    self.get_logger().error("물리 명령 실패: " + reason)
+                    self.get_logger().error("물리 명령 실패: " + failure_name(reason))
                 with self.lock:
                     self.busy = False
                 self.publish_status(
@@ -360,7 +361,7 @@ class SimulationNode(Node):
             self.publish_status(
                 "INITIALIZATION_FAILED", completed=True, reason=str(error)
             )
-            self.get_logger().error("시뮬레이션 초기화 실패: " + str(error))
+            self.get_logger().error("시뮬레이션 초기화 실패: " + failure_name(str(error)))
         finally:
             if p.isConnected():
                 p.disconnect()
