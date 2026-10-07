@@ -1,0 +1,12 @@
+# 서비스는 접수만 한다. 긴 물리 동작의 완료는 TaskStatus로 전달한다.
+uint64 command_id
+uint64 scan_id
+# scan / pick / recover / wait / finalize / stop
+string command
+ObjectCandidate target
+string failure_reason
+uint32 retry_index
+bool all_candidates
+---
+bool accepted
+string reason
