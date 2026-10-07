@@ -54,6 +54,14 @@ NAMES = {
     'camera_empty': '빈 장면 탐지 대조',
 }
 FAILURES = {
+    'task_stopped': '사용자 요청으로 동작을 중단함',
+    'communication_timeout': 'ROS2 응답 제한 시간이 지나 작업을 중단함',
+    'simulation_unavailable': '시뮬레이션 명령 서비스에 연결할 수 없음',
+    'initialization_failed': 'ROS2 시뮬레이션 초기화에 실패함',
+    'initial_scene_not_settled': '초기 배치가 안정적으로 정착하지 못함',
+    'perception_failed': '카메라 데이터 처리 또는 CNN 인식에 실패함',
+    'command_rejected': '시뮬레이션이 명령을 거절함',
+    'command_service_failed': '시뮬레이션 명령 전달에 실패함',
     'retry_limit_reached': '허용한 재시도 횟수를 모두 사용함',
     'retry_target_not_found': '이전 영상 중심 근처에서 재시도 대상을 찾지 못함',
     'retry_target_ambiguous': '이전 영상 중심 근처에 후보가 여러 개여서 재시도 대상을 구별하지 못함',

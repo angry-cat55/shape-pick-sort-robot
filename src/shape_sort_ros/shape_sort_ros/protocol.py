@@ -1,4 +1,5 @@
 """영상과 후보를 ROS 메시지로 바꾸고 동작 입력을 확인한다."""
+
 import json
 import math
 import sys
@@ -8,7 +9,6 @@ from sensor_msgs.msg import Image
 from shape_sort_interfaces.msg import ObjectCandidate
 
 from multi_object_scene import LAYOUT
-
 
 # depth는 미터 거리가 아니다. 기존 카메라의 0~1 buffer 값을 그대로 전달한다.
 IMAGE_FORMATS = {
@@ -77,6 +77,8 @@ def candidate_message(geometry):
 def candidate_dict(message):
     # 로봇이 쓰는 주요 값은 기록용 JSON보다 메시지의 좌표·종류 필드를 우선한다.
     geometry = json.loads(message.details_json or "{}")
+    if not isinstance(geometry, dict):
+        raise ValueError("후보 부가 정보는 JSON 객체여야 합니다")
     geometry.update(
         valid=message.valid,
         failure_reason=message.failure_reason,
