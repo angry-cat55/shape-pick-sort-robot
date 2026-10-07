@@ -97,6 +97,8 @@ class RosNodeIntegrationTests(unittest.TestCase):
             wait_for(
                 lambda: start.service_is_ready()
                 and ready.service_is_ready()
+                # 명령 서비스도 이 관측 노드에서 발견된 뒤 요청한다.
+                and command.service_is_ready()
                 and any(status.stage == 'READY' for status in task_status)
             )
             # 잘못된 명령이 팔 이동으로 이어지지 않는지 실제 서비스로 확인한다.

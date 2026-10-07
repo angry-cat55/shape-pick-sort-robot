@@ -30,6 +30,8 @@ from rgbd_camera import capture
 from terminal_ko import failure_name
 from shape_sort_ros.protocol import candidate_dict, image_message, validate_target
 
+from shape_sort_ros.protocol import log_communication
+
 
 class SimulationNode(Node):
     def __init__(self):
@@ -37,6 +39,9 @@ class SimulationNode(Node):
 
         # 장면 설정은 ROS 파라미터로 받는다. 기본값은 기존 혼합 장면과 같다.
         self.declare_parameter("mode", "gui")
+        # 보기용 창 크기만 조절한다. 학습·좌표 계산용 카메라 해상도는 그대로 둔다.
+        self.declare_parameter("gui_width", 0)
+        self.declare_parameter("gui_height", 0)
         self.declare_parameter("cuboids", 3)
         self.declare_parameter("cylinders", 2)
         self.declare_parameter("seed", 0)
@@ -56,7 +61,7 @@ class SimulationNode(Node):
             CameraObservation, "/shape_sort/observation", 1
         )
         self.service = self.create_service(
-            RobotCommand, "/shape_sort/robot_command", self.accept_command
+            RobotCommand, "/shape_sort/robot_command", self.on_robot_command
         )
 
         # ROS 콜백은 접수만 하고, PyBullet은 이 작업 스레드 한 곳에서만 호출한다.
@@ -94,6 +99,32 @@ class SimulationNode(Node):
         message.failure_reason = reason
         message.result_json = json.dumps(result or {}, allow_nan=False)
         self.status_pub.publish(message)
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/robot_status",
+            "발행",
+            f"명령 {message.command_id} · 상태 {stage}",
+        )
+
+    def on_robot_command(self, request, response):
+        log_communication(
+            self,
+            "서비스",
+            "/shape_sort/robot_command",
+            "요청 수신",
+            f"명령 {request.command_id} · {request.command}",
+        )
+        # 접수 판단은 기존 함수에 맡기고, 응답을 돌려주기 직전에 결과만 기록한다.
+        response = self.accept_command(request, response)
+        log_communication(
+            self,
+            "서비스",
+            "/shape_sort/robot_command",
+            "응답 준비",
+            f"명령 {request.command_id} · 접수 {'성공' if response.accepted else '거절'}",
+        )
+        return response
 
     def accept_command(self, request, response):
         # 정지는 동작 중에도 접수한다. 다음 물리 스텝에서 팔 이동을 중단한다.
@@ -162,7 +193,12 @@ class SimulationNode(Node):
         cylinders = self.get_parameter("cylinders").value
         validate_counts(cuboids, cylinders)
         seed = self.get_parameter("seed").value
-        p.connect(p.GUI if self.gui else p.DIRECT)
+        width = self.get_parameter("gui_width").value
+        height = self.get_parameter("gui_height").value
+        if width < 0 or height < 0 or bool(width) != bool(height):
+            raise ValueError("창 너비와 높이는 둘 다 양수 또는 둘 다 0이어야 합니다")
+        options = f"--width={width} --height={height}" if self.gui and width else ""
+        p.connect(p.GUI if self.gui else p.DIRECT, options=options)
 
         attempts = []
         for attempt in range(LAYOUT["max_scene_attempts"]):
@@ -254,6 +290,13 @@ class SimulationNode(Node):
             self.last_scan_id = request.scan_id
             self.scan_used = False
         self.camera_pub.publish(message)
+        log_communication(
+            self,
+            "토픽",
+            "/shape_sort/observation",
+            "발행",
+            f"촬영 {message.scan_id} · RGB/깊이 영상",
+        )
         return {"remaining_count": len(self.remaining)}
 
     def pick(self, request):
@@ -361,7 +404,9 @@ class SimulationNode(Node):
             self.publish_status(
                 "INITIALIZATION_FAILED", completed=True, reason=str(error)
             )
-            self.get_logger().error("시뮬레이션 초기화 실패: " + failure_name(str(error)))
+            self.get_logger().error(
+                "시뮬레이션 초기화 실패: " + failure_name(str(error))
+            )
         finally:
             if p.isConnected():
                 p.disconnect()

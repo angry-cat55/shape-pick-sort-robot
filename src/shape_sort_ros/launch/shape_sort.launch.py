@@ -21,6 +21,8 @@ def generate_launch_description():
         "model_dir": str(root / "checkpoints/shape_cnn_v1"),
         "output_dir": str(default_output),
         "mode": "gui",
+        "gui_width": "0",
+        "gui_height": "0",
         "cuboids": "3",
         "cylinders": "2",
         "seed": "0",
@@ -53,6 +55,8 @@ def generate_launch_description():
         parameters=[
             {
                 "mode": value("mode", str),
+                "gui_width": value("gui_width", int),
+                "gui_height": value("gui_height", int),
                 "cuboids": value("cuboids", int),
                 "cylinders": value("cylinders", int),
                 "seed": value("seed", int),
