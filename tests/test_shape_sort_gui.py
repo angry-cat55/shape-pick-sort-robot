@@ -107,6 +107,29 @@ class ProcessTests(unittest.TestCase):
                 foreign.terminate()
                 foreign.wait(timeout=5)
 
+    def test_parent_exit_cleans_child_that_keeps_output_pipe_open(self):
+        with tempfile.TemporaryDirectory() as folder:
+            code = "import subprocess,sys; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); print(child.pid,flush=True)"
+            run = gui.SimulationProcess(
+                [sys.executable, '-u', '-c', code], Path(folder), Path(folder)
+            )
+            try:
+                run.start()
+                self.wait_until(lambda: run.process.poll() is not None)
+                # 부모가 끝나도 자식이 로그 파이프를 열고 있으면 읽기는 끝나지 않는다.
+                self.assertTrue(
+                    run.finished.wait(3), '부모 종료 뒤 남은 자식도 자동 정리해야 함'
+                )
+                child_pid = int(
+                    (Path(folder) / 'terminal.log').read_text().splitlines()[0]
+                )
+                stat = Path(f'/proc/{child_pid}/stat')
+                if stat.exists():
+                    self.assertEqual(stat.read_text().split()[2], 'Z')
+            finally:
+                run.stop()
+                run.finished.wait(8)
+
     def test_noncooperative_process_is_forcefully_stopped(self):
         with tempfile.TemporaryDirectory() as folder:
             code = "import signal,time; signal.signal(signal.SIGINT,signal.SIG_IGN); signal.signal(signal.SIGTERM,signal.SIG_IGN); print('준비',flush=True); time.sleep(30)"

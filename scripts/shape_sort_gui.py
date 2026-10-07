@@ -113,6 +113,14 @@ class SimulationProcess:
             target=self.read_output, name="simulation-log", daemon=True
         )
         self.reader.start()
+        # 남은 자식이 로그를 열고 있어도 부모 종료를 별도로 감지해 정리를 시작한다.
+        threading.Thread(
+            target=self.watch_parent, name="simulation-exit", daemon=True
+        ).start()
+
+    def watch_parent(self):
+        self.process.wait()
+        self.stop()
 
     def read_output(self):
         # stdout 읽기는 기다릴 수 있으므로 별도 스레드에서 한다. GUI에는 큐로 전달한다.
