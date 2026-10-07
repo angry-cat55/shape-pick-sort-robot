@@ -30,7 +30,10 @@ log/
 
 # Generated RGB crops, manifests, dataset zip files, checkpoints and run artifacts
 /data/
-/checkpoints/
+/checkpoints/*
+!/checkpoints/shape_cnn_v1/
+/checkpoints/shape_cnn_v1/*
+!/checkpoints/shape_cnn_v1/best_params.json
 /outputs/
 
 # Editor and OS files

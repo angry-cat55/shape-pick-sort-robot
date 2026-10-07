@@ -148,7 +148,7 @@ source install/setup.bash
 ros2 launch shape_sort_ros shape_sort.launch.py
 ```
 
-기본값은 직육면체3개·수직 원기둥2개, 랜덤 크기, GUI입니다. 창을 연 뒤 **장면과 CNN이 준비된 상태에서 시작 요청을 기다립니다.** `checkpoints/shape_cnn_v1/`에는 기존 학습 결과가 있어야 합니다. 모델·데이터는 Git에 포함하지 않습니다.
+기본값은 직육면체3개·수직 원기둥2개, 랜덤 크기, GUI입니다. 창을 연 뒤 **장면과 CNN이 준비된 상태에서 시작 요청을 기다립니다.** `checkpoints/shape_cnn_v1/`에는 기존 학습 결과가 있어야 합니다. 학습·전처리 설정인 `best_params.json`은 Git에 포함하며, 가중치 `best_model.pt`와 데이터는 제외합니다. 설정 파일만으로 모델을 실행할 수는 없으므로 학습한 가중치는 따로 준비해야 합니다.
 
 별도 터미널에서 시작·상태 확인·정지를 할 수 있습니다. 매 터미널에서 먼저 환경을 불러옵니다.
 
@@ -196,6 +196,8 @@ shape-pick-sort-robot/
 ├── README.md                   프로젝트 소개·설치·실행 방법
 ├── requirements-sim.txt        시뮬레이션 패키지
 ├── requirements-inference.txt  CPU CNN 추론 패키지
+├── checkpoints/shape_cnn_v1/
+│   └── best_params.json        선택한 학습 설정·모델·전처리 정보
 ├── src/
 │   ├── shape_sort_interfaces/  노드끼리 주고받을 메시지·서비스 형식
 │   │   ├── msg/               관측·객체 후보·인식 결과·작업 상태
