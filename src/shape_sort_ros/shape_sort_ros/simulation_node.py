@@ -37,6 +37,9 @@ class SimulationNode(Node):
 
         # 장면 설정은 ROS 파라미터로 받는다. 기본값은 기존 혼합 장면과 같다.
         self.declare_parameter("mode", "gui")
+        # 보기용 창 크기만 조절한다. 학습·좌표 계산용 카메라 해상도는 그대로 둔다.
+        self.declare_parameter("gui_width", 0)
+        self.declare_parameter("gui_height", 0)
         self.declare_parameter("cuboids", 3)
         self.declare_parameter("cylinders", 2)
         self.declare_parameter("seed", 0)
@@ -162,7 +165,12 @@ class SimulationNode(Node):
         cylinders = self.get_parameter("cylinders").value
         validate_counts(cuboids, cylinders)
         seed = self.get_parameter("seed").value
-        p.connect(p.GUI if self.gui else p.DIRECT)
+        width = self.get_parameter("gui_width").value
+        height = self.get_parameter("gui_height").value
+        if width < 0 or height < 0 or bool(width) != bool(height):
+            raise ValueError("창 너비와 높이는 둘 다 양수 또는 둘 다 0이어야 합니다")
+        options = f"--width={width} --height={height}" if self.gui and width else ""
+        p.connect(p.GUI if self.gui else p.DIRECT, options=options)
 
         attempts = []
         for attempt in range(LAYOUT["max_scene_attempts"]):
@@ -361,7 +369,9 @@ class SimulationNode(Node):
             self.publish_status(
                 "INITIALIZATION_FAILED", completed=True, reason=str(error)
             )
-            self.get_logger().error("시뮬레이션 초기화 실패: " + failure_name(str(error)))
+            self.get_logger().error(
+                "시뮬레이션 초기화 실패: " + failure_name(str(error))
+            )
         finally:
             if p.isConnected():
                 p.disconnect()
