@@ -6,7 +6,7 @@ ROKEY 부트캠프 개인 프로젝트로, 모델 학습부터 로컬 추론·�
 
 > **현재 상태: CNN으로 두 종류를 분류하고, 카메라 좌표로 하나씩 종류별 상자에 운반**
 > Colab에서 학습한 모델을 CPU 추론에 연결했습니다. 기본 크기 혼합 장면6개에서30개 모두 올바르게 분류·운반했고, 하나를 옮길 때마다 다시 촬영합니다.
-> 랜덤 크기 생성·영상 기반 가림 보류와 집기 실패·낙하 후 제한된 재시도를 추가했습니다. ROS2 연결은 다음 단계입니다.
+> 랜덤 크기 생성·영상 기반 가림 보류와 집기 실패·낙하 후 제한된 재시도를 추가했습니다. ROS2 노드 세 개로 관측·인식 결과·운반 명령을 주고받는 실행도 추가했습니다.
 
 ## 첫 장면 실행
 
@@ -122,15 +122,100 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -p test_grasp_retry.py
 ```
 
+## ROS2로 실행하기
+
+ROS2 실행은 세 노드가 역할을 나눕니다. **시뮬레이션 노드**가 촬영과 실제 접촉 동작을 맡고, **인식 노드**가 기존 CNN·좌표 계산을 사용하며, **작업 관리 노드**가 대상 선택·운반 순서·재촬영·재시도를 지시합니다. 기존 Python 실행 명령도 그대로 사용할 수 있습니다.
+
+```text
+작업 관리: 촬영 요청
+    → 시뮬레이션: RGB·깊이·빈 테이블 기준 발행
+    → 인식: 영역 분리·필요한 후보만 CNN·좌표 계산
+    → 작업 관리: 한 대상 선택·운반 요청
+    → 시뮬레이션: 접촉 집기·운반·도착 판정·복귀
+    → 작업 관리: 완료 확인 후 다시 촬영
+```
+
+### 빌드와 장면 준비
+
+Ubuntu의 **ROS2 Jazzy·Python 3.12·colcon** 환경에서 검증했습니다. 프로젝트 루트에서 실행합니다. ROS2의 시스템 모듈과 기존 PyBullet·torch를 함께 사용하도록 가상환경에 `--system-site-packages`를 적용합니다. 기존 가상환경이 있으면 설치한 패키지를 유지하면서 이 설정을 갱신할 수 있습니다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -r requirements-sim.txt -r requirements-inference.txt
+.venv/bin/python /usr/bin/colcon build --packages-up-to shape_sort_ros --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+source install/setup.bash
+ros2 launch shape_sort_ros shape_sort.launch.py
+```
+
+기본값은 직육면체3개·수직 원기둥2개, 랜덤 크기, GUI입니다. 창을 연 뒤 **장면과 CNN이 준비된 상태에서 시작 요청을 기다립니다.** `checkpoints/shape_cnn_v1/`에는 기존 학습 결과가 있어야 합니다. 학습·전처리 설정인 `best_params.json`은 Git에 포함하며, 가중치 `best_model.pt`와 데이터는 제외합니다. 설정 파일만으로 모델을 실행할 수는 없으므로 학습한 가중치는 따로 준비해야 합니다.
+
+별도 터미널에서 시작·상태 확인·정지를 할 수 있습니다. 매 터미널에서 먼저 환경을 불러옵니다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 service call /shape_sort/start std_srvs/srv/Trigger '{}'
+ros2 topic echo /shape_sort/task_status
+```
+
+정지할 때는 다음 명령을 사용합니다.
+
+```bash
+ros2 service call /shape_sort/stop std_srvs/srv/Trigger '{}'
+```
+
+**시작 서비스의 응답은 접수 여부입니다.** 실제 성공은 `/shape_sort/task_status`의 `stage: FINISHED`, `completed: true`, `success: true`와 결과 파일로 확인합니다. 정지는 다음 물리 스텝에서 현재 이동을 중단하며, 자동으로 물체를 놓거나 팔을 복귀시키지는 않습니다. 중단·완료 후 새 장면은 Ctrl+C로 노드를 끝내고 다시 실행합니다. 작업이 끝나도 상태를 확인할 수 있도록 노드는 유지됩니다.
+
+준비 후 바로 운반을 시작하거나 창 없이 검사하려면 다음처럼 실행합니다.
+
+```bash
+ros2 launch shape_sort_ros shape_sort.launch.py auto_start:=true mode:=direct cuboids:=3 cylinders:=2 seed:=1
+```
+
+`mode:=gui`는 화면 실행, `size_mode:=fixed`는 기존 기본 크기, `max_retries:=0`은 첫 실패에서 중단입니다. 기본 재시도2회와 실패 구분은 기존 실행과 같습니다. `output_dir:=/원하는/절대경로`로 저장 위치를 지정할 수 있습니다. 기본은 `outputs/ros2-날짜시간/`이며, 관측·crop·CNN 점수·실패 시도·접촉 로그·최종 결과가 저장됩니다.
+
+촬영마다 `scan_id`, 명령마다 `command_id`를 붙여 현재 기다리는 결과만 사용합니다. 깊이 메시지는 미터가 아니라 기존 카메라의 **0~1 depth buffer**이며, 인식 단계에서 기존 함수로 변환합니다. ROS2 연결은 구성요소 사이의 통신이며, 실제 로봇 연결이나 MoveIt 경로 계획을 추가한 것은 아닙니다.
+
+### ROS2 검증 실행
+
+위 빌드와 `source` 후 다음 명령은 기존 회귀 테스트와 ROS 메시지·재시도 정책·실제 세 노드 통합 테스트를 실행합니다. 별도로 실행한 장면과 섞이지 않도록 통합 테스트는 독립 ROS 도메인을 사용합니다.
+
+```bash
+SHAPE_SORT_ROS_INTEGRATION=1 .venv/bin/python -m unittest discover -s tests
+```
+
+ROS2 통합에서는 기본 크기 혼합2개와 랜덤 크기 혼합5개에서 분류·접촉 운반·최종 정착을 확인했습니다. 잘못된 명령 거절과 이동 중 정지도 확인했습니다. 이는 선택한 장면의 검증이며, 모든 배치의 성공률은 아닙니다. 재시도 정책 테스트와 기존 실제 실패·복구 테스트는 별도로 유지합니다.
+
 ## 파일 구조와 역할
 
-실행 코드는 `scripts/`, 자동 검증은 `tests/`, CNN 학습 코드는 `notebooks/`에 있습니다.
+기존 실행과 공통 계산은 `scripts/`, ROS2 패키지는 `src/`, 자동 검증은 `tests/`, CNN 학습 코드는 `notebooks/`에 있습니다.
 
 ```text
 shape-pick-sort-robot/
 ├── README.md                   프로젝트 소개·설치·실행 방법
 ├── requirements-sim.txt        시뮬레이션 패키지
 ├── requirements-inference.txt  CPU CNN 추론 패키지
+├── checkpoints/shape_cnn_v1/
+│   └── best_params.json        선택한 학습 설정·모델·전처리 정보
+├── src/
+│   ├── shape_sort_interfaces/  노드끼리 주고받을 메시지·서비스 형식
+│   │   ├── msg/               관측·객체 후보·인식 결과·작업 상태
+│   │   ├── srv/RobotCommand.srv  촬영·운반·복구 등 명령 접수
+│   │   ├── CMakeLists.txt     메시지·서비스 코드 생성
+│   │   └── package.xml       인터페이스 의존성
+│   └── shape_sort_ros/
+│       ├── shape_sort_ros/
+│       │   ├── __init__.py
+│       │   ├── simulation_node.py    장면·촬영·실제 접촉 동작
+│       │   ├── perception_node.py    CNN·영상 좌표 추정
+│       │   ├── task_manager_node.py  대상 선택·순서·재시도
+│       │   └── protocol.py           영상·후보 변환과 입력 검사
+│       ├── launch/shape_sort.launch.py  세 노드 함께 실행
+│       ├── resource/shape_sort_ros  ROS 패키지 등록 표시
+│       ├── setup.py           노드와 공통 Python 코드 설치
+│       ├── setup.cfg          노드 실행 파일 설치 위치
+│       └── package.xml        노드 패키지 의존성
 ├── scripts/
 │   ├── multi_object_scene.py   배치·카메라 인식·운반·실패 대응
 │   ├── contact_grasp_probe.py  공통 로봇 제어·접촉 검증·단일 물체 실험
@@ -298,7 +383,7 @@ Python · PyBullet · PyTorch · NumPy · OpenCV · ROS2
 
 이 모델을 `multi_object_scene.py`에 연결해, 기본 크기 직육면체3+원기둥2 및 직육면체2+원기둥3을 각각 seed 0 ~ 2에서 검증했습니다. **6장면·30개 모두 올바른 분류·들림·종류별 상자 도착·최종 정착을 확인**했습니다. 분류 정답 여부와 실제 상자 도착 여부는 별도 기록합니다. 이는 선택한 기본 크기 조건의 결과이며, 임의 크기나 모든 가림의 성공률은 아닙니다.
 
-원본 관측·crop·클래스 점수·접촉 로그는 `outputs/cnn-local-validation/`에 로컬로 보관합니다. 현재는 원인별 제한된 재시도를 연결했으며, ROS2는 다음 작업입니다.
+원본 관측·crop·클래스 점수·접촉 로그는 `outputs/cnn-local-validation/`에 로컬로 보관합니다. 현재는 원인별 제한된 재시도와 ROS2 통신 실행을 연결했습니다.
 
 사진·zip·가중치·전체 실행 결과와 개인 학습 정리는 Git에서 제외합니다. [Colab 학습 코드](notebooks/shape_cnn_colab.ipynb)와 README에 사용하는 대표 그래프4장만 저장소에 남깁니다. 원본 실험 기록은 개인 Drive와 로컬 `outputs/colab-result-review/`에 보관합니다.
 
