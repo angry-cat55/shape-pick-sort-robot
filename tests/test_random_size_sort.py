@@ -52,7 +52,7 @@ class RandomSizeTests(unittest.TestCase):
         import tempfile
         folder = ROOT/'checkpoints/shape_cnn_v1'
         if not (folder/'best_model.pt').exists():
-            self.skipTest('개인 학습 가중치는 Git에 포함하지 않습니다')
+            self.skipTest('공개 학습 가중치 best_model.pt가 없습니다')
         client = p.connect(p.DIRECT)
         try:
             scene = build_scene(sample_spawns(0,5,1,LAYOUT['region'],size_range_m=RANGE),LAYOUT)

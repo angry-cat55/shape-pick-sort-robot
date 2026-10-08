@@ -140,7 +140,7 @@ class CnnInferenceTests(unittest.TestCase):
     def test_real_weights_classify_both_shapes_and_transport_mixed_scene(self):
         m = self.module()
         folder = ROOT/'checkpoints/shape_cnn_v1'
-        if not (folder/'best_model.pt').is_file(): self.skipTest('개인 학습 가중치는 Git에 포함하지 않습니다')
+        if not (folder/'best_model.pt').is_file(): self.skipTest('공개 학습 가중치 best_model.pt가 없습니다')
         from multi_object_scene import build_scene, sample_spawns, settle_scene, sort_scene, LAYOUT
         from rgbd_camera import capture, estimate_many
         import inspect
