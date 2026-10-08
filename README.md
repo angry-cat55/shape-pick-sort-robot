@@ -126,15 +126,22 @@ CNN은 깊이를 제외한 **64×64 RGB 사진**으로 직육면체와 원기둥
 
 같은 테스트 896장에서 Colab과 로컬의 예측 종류가 모두 같았고, 기본 크기 혼합 6장면·30개 물체의 분류·운반·최종 정착을 확인했습니다.
 
-[Colab 학습 노트북](notebooks/shape_cnn_colab.ipynb)과 [최종 학습 설정](checkpoints/shape_cnn_v1/best_params.json)은 공개합니다.
+[Colab 학습 노트북](notebooks/shape_cnn_colab.ipynb), [최종 학습 설정](checkpoints/shape_cnn_v1/best_params.json), [학습 가중치](checkpoints/shape_cnn_v1/best_model.pt)를 공개합니다.
 
-사진·가중치·실행 결과는 로컬에서 관리합니다.
+학습 사진과 실행 결과는 로컬에서 관리합니다. 프로그램 실행에는 학습 사진이 필요하지 않습니다.
 
 ## 설치와 실행
 
 Ubuntu 24.04 · Python 3.12 · ROS2 Jazzy 환경에서 검증했습니다.
 
 ROS2 Jazzy와 colcon이 설치된 환경에서 프로젝트 루트 기준으로 실행합니다.
+
+먼저 저장소를 내려받고 프로젝트 폴더로 이동합니다.
+
+~~~bash
+git clone https://github.com/angry-cat55/shape-pick-sort-robot.git
+cd shape-pick-sort-robot
+~~~
 
 ### 1. 패키지 설치·ROS2 빌드
 
@@ -147,11 +154,11 @@ python3 -m venv --system-site-packages .venv
 
 Tkinter가 없다면 `sudo apt install python3-tk`로 설치합니다.
 
-### 2. 학습 가중치 준비
+### 2. 포함된 학습 가중치 확인
 
-학습한 `best_model.pt`를 `checkpoints/shape_cnn_v1/`에 넣습니다.
+`checkpoints/shape_cnn_v1/`에 `best_model.pt`와 `best_params.json`이 함께 포함되어 있습니다. 저장소를 내려받으면 별도 학습이나 가중치 다운로드 없이 사용할 수 있습니다.
 
-공개된 `best_params.json`과 **같은 학습 실행에서 나온 가중치**가 필요합니다.
+두 파일은 **같은 학습 실행에서 나온 한 쌍**입니다. 직접 다시 학습한 모델을 사용하려면 가중치와 설정을 함께 교체해야 합니다.
 
 설정 파일만으로는 CNN을 실행할 수 없습니다.
 
@@ -209,6 +216,7 @@ shape-pick-sort-robot/
 ├── requirements-sim.txt                 시뮬레이션 의존성
 ├── requirements-inference.txt           CNN 추론 의존성
 ├── checkpoints/shape_cnn_v1/
+│   ├── best_model.pt                    CNN 학습 가중치
 │   └── best_params.json                 최종 학습·전처리 설정
 ├── src/
 │   ├── shape_sort_interfaces/           ROS2 메시지·서비스 형식
