@@ -18,7 +18,17 @@
 
 - 제어 창에서 ROS 통신 로그와 로봇 실행 로그를 따로 확인합니다.
 
-**기술:** Python · PyBullet · PyTorch · NumPy · OpenCV · ROS2 Jazzy · Tkinter
+
+**기술 스택**
+
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
+![PyBullet](https://img.shields.io/badge/PyBullet-444444)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-013243?logo=numpy&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?logo=opencv&logoColor=white)
+![ROS2 Jazzy](https://img.shields.io/badge/ROS2_Jazzy-22314E?logo=ros&logoColor=white)
+![Tkinter](https://img.shields.io/badge/Tkinter-3776AB)
+
 
 ## 전체 동작 흐름
 
@@ -39,10 +49,10 @@ RGB-D 관찰
                      ↓
                집기 결과 검증
           ┌──────────┴──────────┐
-       성공                    실패
+        [성공]                 [실패]
  상자 운반 · 내려놓기     재관찰 · 제한된 재시도
           ↓
-      도착 결과 검증
+     도착 결과 검증
 ```
 
 후보가 검사에서 탈락하면 같은 촬영의 다음 후보를 확인합니다. 하나가 통과하면 나머지는 분류하지 않고 운반합니다.
